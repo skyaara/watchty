@@ -1,0 +1,24 @@
+#!/bin/bash
+# Ghostty launches surface commands under a clean login shell (--noprofile --norc),
+# so `#!/usr/bin/env bun` fails. This wrapper calls bun by absolute path.
+set -euo pipefail
+
+BUN_BIN="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+if [[ ! -x "$BUN_BIN" ]]; then
+  BUN_BIN="$(command -v bun 2>/dev/null || true)"
+fi
+if [[ -z "${BUN_BIN}" || ! -x "$BUN_BIN" ]]; then
+  echo "watchty: bun not found (expected at ~/.bun/bin/bun)" >&2
+  exit 127
+fi
+
+# Resolve through bun link symlinks: ~/.bun/bin/foo -> .../package/bin/foo
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+exec "$BUN_BIN" "$ROOT/src/cli.ts" "$@"

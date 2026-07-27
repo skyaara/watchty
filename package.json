@@ -1,0 +1,52 @@
+{
+  "name": "watchty",
+  "version": "0.1.0",
+  "description": "Watch Cursor Agent shell commands in Ghostty tabs (pull-mode works in any terminal)",
+  "type": "module",
+  "bin": {
+    "watchty": "./bin/watchty"
+  },
+  "files": [
+    "bin",
+    "src",
+    "hooks.example.json",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "hook": "bun run src/cli.ts hook",
+    "doctor": "bun run src/cli.ts doctor",
+    "list": "bun run src/cli.ts list",
+    "config": "bun run src/cli.ts config",
+    "cleanup": "bun run src/cli.ts cleanup",
+    "link": "bun link"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "keywords": [
+    "cursor",
+    "ghostty",
+    "terminal",
+    "shell",
+    "hooks",
+    "tui",
+    "watch",
+    "sidebar"
+  ],
+  "author": "skyaara",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skyaara/watchty.git"
+  },
+  "bugs": {
+    "url": "https://github.com/skyaara/watchty/issues"
+  },
+  "homepage": "https://github.com/skyaara/watchty#readme",
+  "devDependencies": {
+    "bun-types": "^1.3.14"
+  }
+}

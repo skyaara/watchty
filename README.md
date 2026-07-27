@@ -1,0 +1,170 @@
+# watchty
+
+Watch Cursor Agent shell commands in **Ghostty** — a live sidebar of what the agent ran, outside the chat UI.
+
+Commands still execute inside Cursor. watchty only **mirrors** transcripts into Ghostty tabs (or any terminal via pull mode). It is not an agent.
+
+**Ghostty** is the focused auto-open experience. **Any terminal** can attach with `watchty view`.
+
+## Requirements
+
+- macOS (Ghostty auto-open uses AppleScript)
+- [Bun](https://bun.sh) ≥ 1.1
+- [Ghostty](https://ghostty.org) ≥ 1.3 for auto-open tabs
+- Cursor hooks enabled
+
+Pull-only viewing works in iTerm, Terminal.app, Kitty, WezTerm, Alacritty, etc.
+
+## Install
+
+```bash
+git clone https://github.com/skyaara/watchty.git
+cd watchty
+bun install
+bun link
+watchty install-hooks
+watchty doctor
+```
+
+If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `install-hooks --force` to overwrite.
+
+On first Ghostty open from a hook, macOS may ask to allow **Automation** (Cursor → Ghostty). Approve it.
+
+Migrating from an older local install that used `~/.cursor/agent-ghostty`:
+
+```bash
+mv ~/.cursor/agent-ghostty ~/.cursor/watchty   # optional; watchty also reads the legacy path
+```
+
+## Usage
+
+### Ghostty (default)
+
+Start an Agent chat and run shell commands. A Ghostty tab opens (without stealing focus by default) and follows:
+
+```text
+~/.cursor/watchty/sessions/<conversation_id>.jsonl
+```
+
+Defaults:
+
+- `background: true` — don’t activate Ghostty / steal app focus
+- `focus: false` — create the tab but **stay on your current Ghostty tab**
+- Tab titles use the Cursor chat name (e.g. `repo | Fix login`)
+
+```bash
+watchty config set focus true   # jump to new session tabs
+```
+
+### Pull mode (any terminal)
+
+Hooks always write the same jsonl. Skip Ghostty auto-open and attach from any terminal:
+
+```bash
+watchty config set autoOpen false
+
+watchty list
+watchty view                        # latest live session
+watchty view "Fix login"            # substring of Cursor chat / tab title
+```
+
+`view` polls the jsonl (~120ms) and redraws when it grows. Ghostty-only features (`focus`, `i` / `I` shell splits) are unavailable elsewhere; the output mirror still works.
+
+### Cleanup (TTL)
+
+Session state and transcripts under `~/.cursor/watchty/` are pruned by age.
+
+| | |
+|--|--|
+| **Default TTL** | `7d` (`ttlHours: 168`) |
+| **Age based on** | `endedAt`, else `updatedAt` |
+| **Auto** | On `sessionStart` / `sessionEnd`, at most once per hour |
+| **Manual** | `watchty cleanup` |
+| **Disable auto** | `config set ttl 0` (manual `--ttl` still works) |
+
+Deletes: state entry, `.jsonl`, viewer lock, pending cmd file, legacy `.log`.
+
+```bash
+watchty config set ttl 7d
+watchty config set ttl 0            # disable auto-cleanup
+
+watchty cleanup                     # configured TTL
+watchty cleanup --ttl 24h
+watchty cleanup --ttl 3d --dry-run
+```
+
+Duration formats: `7d`, `24h`, `90m`, bare number = hours, or `0` / `off`.
+
+### CLI
+
+```bash
+watchty list
+watchty view [title-or-id]
+watchty focus <title-or-id>         # Ghostty only
+watchty cleanup [--ttl <dur>] [--dry-run]
+watchty config
+watchty config set <key> <value>
+watchty install-hooks [--force]
+watchty doctor
+```
+
+## How it works
+
+1. Cursor fires session/shell hooks.
+2. Hooks append events to `~/.cursor/watchty/sessions/<id>.jsonl`.
+3. **One** Ghostty tab opens per chat (unless `autoOpen` is false).
+4. That tab (or `watchty view` in any terminal) runs a small TUI and polls the jsonl.
+5. TTL cleanup removes old sessions (auto from hooks, or via `cleanup`).
+
+Viewer keys: `↑/↓` or `j/k` select a command, `u/d` scroll, `f` follow latest, `i` / `I` interactive shell split (**Ghostty only**), `q` quit.
+
+## Config
+
+`~/.cursor/watchty/config.json` (hooks read this). Env vars override when set.
+
+| Key / env | Effect |
+|-----------|--------|
+| `autoOpen` / `WATCHTY_AUTO_OPEN` | Open Ghostty from hooks (default `true`) |
+| `background` / `WATCHTY_BACKGROUND` | Don’t activate Ghostty (default `true`) |
+| `focus` / `WATCHTY_FOCUS` | Switch to the new session tab (default `false`) |
+| `ttlHours` / `WATCHTY_TTL` | Auto-delete sessions older than this (default `7d`; `0` = off) |
+
+```bash
+watchty config set autoOpen false
+watchty config set ttl 3d
+watchty config show
+```
+
+```json
+{
+  "autoOpen": true,
+  "background": true,
+  "focus": false,
+  "ttlHours": 168
+}
+```
+
+## Privacy
+
+Hooks can see shell **commands and captured output** from Cursor Agent. watchty writes that data to your machine only:
+
+```text
+~/.cursor/watchty/
+```
+
+Nothing is uploaded. Treat that directory like any other local log of terminal activity. Use TTL cleanup (or `watchty cleanup`) to limit retention. Do not commit or share session `.jsonl` files — they may contain secrets from command output.
+
+## Troubleshooting
+
+- `doctor` reports Ghostty AppleScript failure → install Ghostty 1.3+, ensure `macos-applescript` is not disabled, grant Automation. Pull mode (`view`) still works without Ghostty.
+- No tabs but logs exist → `watchty view` in any terminal.
+- Binary not found from hooks → `bun link` and confirm `which watchty`.
+- Disk filling up → `watchty config set ttl 24h` or `watchty cleanup --dry-run`.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE)

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "watchty hook"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "watchty hook"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "watchty hook"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "watchty hook"
+      }
+    ]
+  }
+}
