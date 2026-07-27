@@ -11,23 +11,39 @@ import {
 } from "./cleanup";
 import { ghosttyAvailable, focusSessionTab } from "./ghostty";
 import { handleHook, packageRoot, readHookPayload, selfBin } from "./hook";
-import { ROOT, STATE_PATH, SESSIONS_DIR } from "./paths";
-import { getSession, listSessions } from "./store";
+import { ROOT, STATE_PATH, SESSIONS_DIR, workspaceWindowTitle, workspaceMatches } from "./paths";
+import { getSession, listSessions, type SessionRecord } from "./store";
 import { viewSession } from "./view";
+import { printComplete, handleCompletionCommand } from "./completion";
+import { detectCursorWorkspace } from "./workspace";
 
 const HELP = `watchty — watch Cursor Agent shell commands in Ghostty tabs
 
 Usage:
   watchty hook              Read Cursor hook JSON from stdin
   watchty view [title|id]   Follow a session (omit = latest live)
-  watchty list              List known sessions
+  watchty list              List sessions (current Cursor workspace by default)
   watchty focus <title|id>  Focus the Ghostty tab for a session
   watchty cleanup [--ttl <dur>] [--dry-run]
   watchty config            Show ~/.cursor/watchty/config.json
   watchty config set <k> <v>
   watchty install-hooks     Write ~/.cursor/hooks.json with absolute binary path
   watchty doctor            Check install / Ghostty / hooks
+  watchty completion install   Enable tab-complete for session names
   watchty help
+
+Workspace filter (list / view / focus / tab-complete):
+  (default)   Current folder if it’s a Cursor workspace; otherwise all
+  -w, --workspace <name|path|.>   Limit to that workspace
+  -a, --all                       All workspaces
+
+  watchty list
+  watchty list -w my-app
+  watchty list --all
+  watchty view -w . "Fix login"
+
+Tab-complete: watchty view <Tab> / watchty focus <Tab>
+  watchty completion install
 
 Config keys (also via env; env wins):
   autoOpen     true|false   Open Ghostty from hooks (default true)
@@ -47,13 +63,77 @@ Cleanup:
   watchty cleanup --dry-run
 `;
 
+type Scope = {
+  /** undefined = auto (Cursor workspace or all); null = --all; string = explicit -w */
+  workspace: string | null | undefined;
+};
+
+function workspaceOpt(scope: Scope): string | undefined {
+  if (scope.workspace === null) return undefined; // --all
+  if (scope.workspace !== undefined) return scope.workspace; // explicit -w
+  return detectCursorWorkspace(process.cwd()); // auto: only if Cursor workspace
+}
+
+function scopedSessions(scope: Scope): SessionRecord[] {
+  return listSessions({ workspace: workspaceOpt(scope) });
+}
+
+function parseScopeAndArgs(argv: string[]): {
+  scope: Scope;
+  positionals: string[];
+  error?: string;
+} {
+  const scope: Scope = { workspace: undefined };
+  const positionals: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--all" || a === "-a") {
+      scope.workspace = null;
+      continue;
+    }
+    if (a === "--workspace" || a === "-w") {
+      const v = argv[++i];
+      if (!v) return { scope, positionals, error: "missing value for --workspace" };
+      scope.workspace = v;
+      continue;
+    }
+    if (a.startsWith("--workspace=")) {
+      scope.workspace = a.slice("--workspace=".length);
+      continue;
+    }
+    if (a.startsWith("-w=")) {
+      scope.workspace = a.slice(3);
+      continue;
+    }
+    if (a.startsWith("-")) {
+      return { scope, positionals, error: `unknown flag: ${a}` };
+    }
+    positionals.push(a);
+  }
+  return { scope, positionals };
+}
+
+function describeScope(scope: Scope): string {
+  if (scope.workspace === null) return "all workspaces";
+  const w = workspaceOpt(scope);
+  if (!w) return "all workspaces (cwd is not a Cursor workspace)";
+  return workspaceWindowTitle(w) + ` (${w})`;
+}
+
 function hooksCommand(): string {
   const linked = Bun.which("watchty");
   if (linked) return `${linked} hook`;
   return `${selfBin()} hook`;
 }
 
-function buildHooksJson(): object {
+type HookEntry = { command: string; [key: string]: unknown };
+type HooksFile = {
+  version?: number;
+  hooks?: Record<string, HookEntry[] | unknown>;
+  [key: string]: unknown;
+};
+
+function buildHooksJson(): HooksFile {
   const command = hooksCommand();
   const entry = [{ command }];
   return {
@@ -67,27 +147,60 @@ function buildHooksJson(): object {
   };
 }
 
-function getSessionByPrefix(prefix: string) {
-  if (getSession(prefix)) return getSession(prefix);
-  const sessions = listSessions();
+function isWatchtyHookEntry(entry: unknown): boolean {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    "command" in entry &&
+    typeof (entry as HookEntry).command === "string" &&
+    (entry as HookEntry).command.includes("watchty")
+  );
+}
+
+/** Insert/update watchty hook entries without dropping unrelated hooks. */
+function mergeWatchtyHooks(existing: HooksFile, ours: HooksFile): HooksFile {
+  const hooks: Record<string, unknown> = { ...(existing.hooks ?? {}) };
+  for (const [event, entries] of Object.entries(ours.hooks ?? {})) {
+    const current = Array.isArray(hooks[event])
+      ? ([...(hooks[event] as HookEntry[])] as HookEntry[])
+      : [];
+    const kept = current.filter((e) => !isWatchtyHookEntry(e));
+    const oursEntries = Array.isArray(entries) ? (entries as HookEntry[]) : [];
+    hooks[event] = [...kept, ...oursEntries];
+  }
+  return {
+    ...existing,
+    version: existing.version ?? ours.version ?? 1,
+    hooks,
+  };
+}
+
+function getSessionByPrefix(prefix: string, scope: Scope = { workspace: null }) {
+  const sessions = scopedSessions(scope);
+  const exact = getSession(prefix);
+  if (exact) {
+    const w = workspaceOpt(scope);
+    if (!w) return exact; // --all or no Cursor workspace detected
+    if (workspaceMatches(exact.workspace, w)) return exact;
+    return undefined;
+  }
   const idMatches = sessions.filter((s) => s.id.startsWith(prefix));
   if (idMatches.length === 1) return idMatches[0];
 
-  // Match Cursor agent / tab title (case-insensitive substring).
   const q = prefix.trim().toLowerCase();
   if (!q) return undefined;
-  const titleMatches = sessions.filter((s) => {
+  const titleMatchesList = sessions.filter((s) => {
     const t = s.title.toLowerCase();
     const name = t.includes(" | ") ? t.slice(t.lastIndexOf(" | ") + 3) : t;
     return t.includes(q) || name.includes(q);
   });
-  return titleMatches.length === 1 ? titleMatches[0] : undefined;
+  return titleMatchesList.length === 1 ? titleMatchesList[0] : undefined;
 }
 
-function titleMatches(query: string) {
+function titleMatches(query: string, scope: Scope = { workspace: null }) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  return listSessions().filter((s) => {
+  return scopedSessions(scope).filter((s) => {
     const t = s.title.toLowerCase();
     const name = t.includes(" | ") ? t.slice(t.lastIndexOf(" | ") + 3) : t;
     return t.includes(q) || name.includes(q);
@@ -95,8 +208,8 @@ function titleMatches(query: string) {
 }
 
 /** Most recently updated session that has not ended (or any latest if none live). */
-function latestSession() {
-  const sessions = listSessions();
+function latestSession(scope: Scope = { workspace: undefined }) {
+  const sessions = scopedSessions(scope);
   const live = sessions.find((s) => !s.endedAt);
   return live ?? sessions[0];
 }
@@ -107,28 +220,36 @@ function parseBool(v: string): boolean | undefined {
   return undefined;
 }
 
-async function cmdList(): Promise<void> {
-  const sessions = listSessions();
+async function cmdList(scope: Scope): Promise<void> {
+  const sessions = scopedSessions(scope);
   if (!sessions.length) {
-    console.log("No sessions yet. Run an Agent chat with hooks installed.");
+    const all = listSessions();
+    if (!all.length) {
+      console.log("No sessions yet. Run an Agent chat with hooks installed.");
+      return;
+    }
+    console.log(`No sessions for ${describeScope(scope)}.`);
+    console.log(`Try: watchty list --all`);
     return;
   }
+  console.log(`# ${describeScope(scope)} · ${sessions.length} session(s)`);
   for (const s of sessions) {
     const ended = s.endedAt ? "ended" : "live ";
     const name = s.title.includes(" | ")
       ? s.title.slice(s.title.lastIndexOf(" | ") + 3)
       : s.title;
+    const ws = s.workspace ? workspaceWindowTitle(s.workspace) : "?";
     console.log(`${ended}  ${name}`);
-    console.log(`        ${s.title}  ·  ${s.id.slice(0, 8)}`);
+    console.log(`        ${s.title}  ·  ${ws}  ·  ${s.id.slice(0, 8)}`);
   }
-  console.log("\nAttach: watchty view \"<title substring>\"");
+  console.log(`\nAttach: watchty view -w . \"<title substring>\"`);
 }
 
-async function cmdView(idArg?: string): Promise<void> {
+async function cmdView(scope: Scope, idArg?: string): Promise<void> {
   if (idArg) {
-    const session = getSessionByPrefix(idArg);
+    const session = getSessionByPrefix(idArg, scope);
     if (!session) {
-      const matches = titleMatches(idArg);
+      const matches = titleMatches(idArg, scope);
       if (matches.length > 1) {
         console.error(`Multiple sessions match "${idArg}":`);
         for (const s of matches) {
@@ -137,7 +258,9 @@ async function cmdView(idArg?: string): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      console.error(`No session matching "${idArg}". Try: watchty list`);
+      console.error(
+        `No session matching "${idArg}" in ${describeScope(scope)}. Try: watchty list --all`,
+      );
       process.exitCode = 1;
       return;
     }
@@ -145,12 +268,12 @@ async function cmdView(idArg?: string): Promise<void> {
     await viewSession(session.id);
     return;
   }
-  const latest = latestSession();
+  const latest = latestSession(scope);
   if (!latest) {
     console.error(
-      "No sessions yet. Run an Agent chat with hooks installed, then:\n" +
-        "  watchty list\n" +
-        "  watchty view \"<agent title>\"",
+      `No sessions for ${describeScope(scope)}. Try:\n` +
+        `  watchty list --all\n` +
+        `  watchty view --all \"<agent title>\"`,
     );
     process.exitCode = 1;
     return;
@@ -159,10 +282,10 @@ async function cmdView(idArg?: string): Promise<void> {
   await viewSession(latest.id);
 }
 
-async function cmdFocus(query: string): Promise<void> {
-  const session = getSessionByPrefix(query);
+async function cmdFocus(scope: Scope, query: string): Promise<void> {
+  const session = getSessionByPrefix(query, scope);
   if (!session) {
-    const matches = titleMatches(query);
+    const matches = titleMatches(query, scope);
     if (matches.length > 1) {
       console.error(`Multiple sessions match "${query}":`);
       for (const s of matches) {
@@ -171,7 +294,7 @@ async function cmdFocus(query: string): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    console.error(`Unknown session: ${query}`);
+    console.error(`Unknown session: ${query} (${describeScope(scope)})`);
     process.exitCode = 1;
     return;
   }
@@ -298,22 +421,47 @@ async function cmdCleanup(argv: string[]): Promise<void> {
 async function cmdInstallHooks(force = false): Promise<void> {
   const hooksPath = join(homedir(), ".cursor", "hooks.json");
   mkdirSync(join(homedir(), ".cursor"), { recursive: true });
+  const ours = buildHooksJson();
 
-  if (existsSync(hooksPath) && !force) {
-    const raw = readFileSync(hooksPath, "utf8");
-    if (!raw.includes("watchty")) {
+  if (!existsSync(hooksPath)) {
+    writeFileSync(hooksPath, JSON.stringify(ours, null, 2) + "\n", "utf8");
+    console.log(`Wrote ${hooksPath}`);
+    console.log(`command: ${hooksCommand()}`);
+    return;
+  }
+
+  const raw = readFileSync(hooksPath, "utf8");
+  let existing: HooksFile;
+  try {
+    existing = JSON.parse(raw) as HooksFile;
+  } catch {
+    if (!force) {
       console.error(
-        `${hooksPath} already exists and is not ours.\n` +
-          `Merge manually, or re-run: watchty install-hooks --force`,
+        `${hooksPath} is not valid JSON.\n` +
+          `Fix it, or re-run: watchty install-hooks --force`,
       );
       process.exitCode = 1;
       return;
     }
+    writeFileSync(hooksPath, JSON.stringify(ours, null, 2) + "\n", "utf8");
+    console.log(`Wrote ${hooksPath} (--force, replaced invalid JSON)`);
+    console.log(`command: ${hooksCommand()}`);
+    return;
   }
 
-  const json = buildHooksJson();
-  writeFileSync(hooksPath, JSON.stringify(json, null, 2) + "\n", "utf8");
-  console.log(`Wrote ${hooksPath}`);
+  if (!raw.includes("watchty") && !force) {
+    console.error(
+      `${hooksPath} already exists and is not ours.\n` +
+        `Merge manually, or re-run: watchty install-hooks --force\n` +
+        `(--force merges watchty in; other hooks are preserved)`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const merged = mergeWatchtyHooks(existing, ours);
+  writeFileSync(hooksPath, JSON.stringify(merged, null, 2) + "\n", "utf8");
+  console.log(`Updated watchty hooks in ${hooksPath} (other hooks preserved)`);
   console.log(`command: ${hooksCommand()}`);
 }
 
@@ -397,7 +545,7 @@ async function cmdDoctor(): Promise<void> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const [cmd, arg, flag] = argv;
+  const [cmd, ...rest] = argv;
 
   switch (cmd) {
     case "hook": {
@@ -406,32 +554,62 @@ async function main(): Promise<void> {
       break;
     }
     case "view": {
-      await cmdView(arg);
-      break;
-    }
-    case "list":
-      await cmdList();
-      break;
-    case "focus": {
-      if (!arg) {
-        console.error("usage: watchty focus <title|id>");
+      const parsed = parseScopeAndArgs(rest);
+      if (parsed.error) {
+        console.error(parsed.error);
+        console.error("usage: watchty view [-w <workspace>|--all] [title|id]");
         process.exitCode = 1;
         break;
       }
-      await cmdFocus(arg);
+      await cmdView(parsed.scope, parsed.positionals[0]);
+      break;
+    }
+    case "list": {
+      const parsed = parseScopeAndArgs(rest);
+      if (parsed.error) {
+        console.error(parsed.error);
+        console.error("usage: watchty list [-w <workspace>|--all]");
+        process.exitCode = 1;
+        break;
+      }
+      await cmdList(parsed.scope);
+      break;
+    }
+    case "focus": {
+      const parsed = parseScopeAndArgs(rest);
+      if (parsed.error) {
+        console.error(parsed.error);
+        console.error("usage: watchty focus [-w <workspace>|--all] <title|id>");
+        process.exitCode = 1;
+        break;
+      }
+      const query = parsed.positionals[0];
+      if (!query) {
+        console.error("usage: watchty focus [-w <workspace>|--all] <title|id>");
+        process.exitCode = 1;
+        break;
+      }
+      await cmdFocus(parsed.scope, query);
       break;
     }
     case "config":
-      await cmdConfig(argv.slice(1));
+      await cmdConfig(rest);
       break;
     case "cleanup":
-      await cmdCleanup(argv.slice(1));
+      await cmdCleanup(rest);
       break;
     case "install-hooks":
-      await cmdInstallHooks(arg === "--force" || flag === "--force");
+      await cmdInstallHooks(rest.includes("--force"));
       break;
     case "doctor":
       await cmdDoctor();
+      break;
+    case "completion":
+      handleCompletionCommand(rest);
+      break;
+    case "complete":
+      // Used by shell completion scripts: watchty complete sessions [prefix]
+      printComplete(rest);
       break;
     case "help":
     case "--help":

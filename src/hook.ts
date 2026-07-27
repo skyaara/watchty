@@ -100,7 +100,8 @@ function refreshTitle(sessionId: string, workspace?: string, hint?: string): str
 /**
  * Open at most one Ghostty tab per conversation_id (lock file prevents races
  * between sessionStart and beforeShellExecution).
- * If the previous tab was closed, clear the stale claim and open a new one.
+ * If the previous tab was closed (dead terminalId), clear the claim and reopen.
+ * In-flight claims (viewerClaimed / lock, no terminal yet) are left alone.
  *
  * With WATCHTY_AUTO_OPEN=0, skip opening — events still land in jsonl
  * for a pull-based `watchty view` from Ghostty.
@@ -119,12 +120,16 @@ function ensureTab(sessionId: string, workspace?: string, hint?: string): void {
     return;
   }
 
-  // Stale claim / closed tab — allow reopen.
-  if (existing?.viewerClaimed || existing?.tabId || existing?.terminalId) {
+  // Only release when we know the previous tab is dead. Never release merely
+  // because viewerClaimed is set — that races with an in-flight open and can
+  // spawn a second Ghostty tab (sessionStart vs beforeShellExecution).
+  if (existing?.terminalId) {
     releaseViewer(sessionId);
   }
 
   if (!claimViewer(sessionId)) {
+    // Another hook owns the live or in-flight claim.
+    refreshTitle(sessionId, workspace ?? existing?.workspace, hint);
     return;
   }
 

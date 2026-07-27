@@ -10,7 +10,7 @@ import { ROOT, SESSIONS_DIR, sanitizeId } from "./paths";
 import {
   ensureDirs,
   loadState,
-  saveState,
+  mutateState,
   sessionEventsPath,
   type SessionRecord,
 } from "./store";
@@ -46,18 +46,19 @@ function unlinkQuiet(path: string): void {
 /** Remove one session from state + on-disk artifacts. */
 export function deleteSession(id: string): void {
   ensureDirs();
-  const state = loadState();
-  const existing = state.sessions[id];
-  const eventsPath = existing?.eventsPath ?? sessionEventsPath(id);
+  let eventsPath = sessionEventsPath(id);
+  mutateState((state) => {
+    const existing = state.sessions[id];
+    if (existing?.eventsPath) eventsPath = existing.eventsPath;
+    delete state.sessions[id];
+  });
   const sid = sanitizeId(id);
 
   unlinkQuiet(eventsPath);
   unlinkQuiet(join(SESSIONS_DIR, `${sid}.viewer.lock`));
   unlinkQuiet(join(SESSIONS_DIR, `${sid}.pending`));
+  unlinkQuiet(join(SESSIONS_DIR, `${sid}.pending.lock`));
   unlinkQuiet(join(SESSIONS_DIR, `${sid}.log`)); // legacy
-
-  delete state.sessions[id];
-  saveState(state);
 }
 
 /**
@@ -123,7 +124,7 @@ function cleanupOrphanFiles(knownIds: Set<string>): void {
     return;
   }
   for (const name of names) {
-    const m = /^(.+)\.(jsonl|viewer\.lock|pending|log)$/.exec(name);
+    const m = /^(.+)\.(jsonl|viewer\.lock|pending\.lock|pending|log)$/.exec(name);
     if (!m) continue;
     const sid = m[1]!;
     const stillKnown = [...knownIds].some((id) => sanitizeId(id) === sid);

@@ -17,16 +17,33 @@ Pull-only viewing works in iTerm, Terminal.app, Kitty, WezTerm, Alacritty, etc.
 
 ## Install
 
+Needs [Bun](https://bun.sh). One-liner (global CLI on PATH — needed so Cursor hooks can find it):
+
 ```bash
-git clone https://github.com/skyaara/watchty.git
-cd watchty
-bun install
-bun link
+bun add -g github:skyaara/watchty
 watchty install-hooks
 watchty doctor
 ```
 
-If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `install-hooks --force` to overwrite.
+Or try without installing:
+
+```bash
+bunx github:skyaara/watchty doctor
+bunx github:skyaara/watchty help
+```
+
+For hooks, prefer `bun add -g` (or `bun link` from a clone) so `~/.cursor/hooks.json` points at a stable binary, not a temporary `bunx` cache path.
+
+From a clone (dev):
+
+```bash
+git clone https://github.com/skyaara/watchty.git
+cd watchty && bun install && bun link
+watchty install-hooks
+watchty doctor
+```
+
+If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `watchty install-hooks --force` to merge watchty into an existing `hooks.json` (other hooks are preserved).
 
 On first Ghostty open from a hook, macOS may ask to allow **Automation** (Cursor → Ghostty). Approve it.
 
@@ -63,8 +80,9 @@ Hooks always write the same jsonl. Skip Ghostty auto-open and attach from any te
 ```bash
 watchty config set autoOpen false
 
-watchty list
-watchty view                        # latest live session
+watchty list                        # this Cursor workspace (if detected)
+watchty list --all                  # every workspace
+watchty view                        # latest live session in scope
 watchty view "Fix login"            # substring of Cursor chat / tab title
 ```
 
@@ -98,15 +116,44 @@ Duration formats: `7d`, `24h`, `90m`, bare number = hours, or `0` / `off`.
 ### CLI
 
 ```bash
-watchty list
+watchty list                        # Cursor workspace for cwd (else all)
+watchty list -w my-app
+watchty list --all
 watchty view [title-or-id]
+watchty view -w . "Fix login"
 watchty focus <title-or-id>         # Ghostty only
 watchty cleanup [--ttl <dur>] [--dry-run]
 watchty config
 watchty config set <key> <value>
 watchty install-hooks [--force]
 watchty doctor
+watchty completion install          # tab-complete session names (zsh/bash)
 ```
+
+### Workspace filter
+
+`list` / `view` / `focus` / tab-complete **auto-scope** when the current folder is a Cursor workspace:
+
+- recorded in a prior agent session (`workspace_roots`), or
+- has a project-local `.cursor/` / `.cursorignore` (not `~/.cursor`)
+
+Subdirectories of that project count too. If you’re outside a Cursor workspace (e.g. `$HOME`), they show **all** sessions.
+
+| Flag | Effect |
+|------|--------|
+| *(default)* | Cursor workspace for cwd when detected; else all |
+| `-w` / `--workspace <name\|path\|.>` | Force that workspace |
+| `-a` / `--all` | Every workspace |
+
+### Tab completion
+
+```bash
+watchty completion install
+exec zsh          # or: source ~/.zshrc
+watchty view <Tab>
+```
+
+Suggestions follow the same workspace filter as `list`. Complete `-w` values with known workspace names.
 
 ## How it works
 
@@ -160,6 +207,8 @@ Nothing is uploaded. Treat that directory like any other local log of terminal a
 - No tabs but logs exist → `watchty view` in any terminal.
 - Binary not found from hooks → `bun link` and confirm `which watchty`.
 - Disk filling up → `watchty config set ttl 24h` or `watchty cleanup --dry-run`.
+- Tab completes folders instead of sessions → `watchty completion install` then `source ~/.zshrc`.
+- `list` shows every project → you’re outside a Cursor workspace; use `-w .` or `cd` into the project.
 
 ## Contributing
 
