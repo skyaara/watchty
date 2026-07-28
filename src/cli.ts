@@ -1,7 +1,4 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { CONFIG_PATH, loadConfig, saveConfig, type WatchtyConfig } from "./config";
 import {
   cleanupSessions,
@@ -9,9 +6,11 @@ import {
   formatTtl,
   parseTtl,
 } from "./cleanup";
-import { ghosttyAvailable, focusSessionTab } from "./ghostty";
-import { handleHook, packageRoot, readHookPayload, selfBin } from "./hook";
-import { ROOT, STATE_PATH, SESSIONS_DIR, workspaceWindowTitle, workspaceMatches } from "./paths";
+import { focusSessionTab } from "./ghostty";
+import { handleHook, readHookPayload } from "./hook";
+import { cmdInstallHooks } from "./hooks";
+import { cmdDoctor } from "./doctor";
+import { workspaceWindowTitle, workspaceMatches } from "./paths";
 import { getSession, listSessions, type SessionRecord } from "./store";
 import { viewSession } from "./view";
 import { printComplete, handleCompletionCommand } from "./completion";
@@ -118,61 +117,6 @@ function describeScope(scope: Scope): string {
   const w = workspaceOpt(scope);
   if (!w) return "all workspaces (cwd is not a Cursor workspace)";
   return workspaceWindowTitle(w) + ` (${w})`;
-}
-
-function hooksCommand(): string {
-  const linked = Bun.which("watchty");
-  if (linked) return `${linked} hook`;
-  return `${selfBin()} hook`;
-}
-
-type HookEntry = { command: string; [key: string]: unknown };
-type HooksFile = {
-  version?: number;
-  hooks?: Record<string, HookEntry[] | unknown>;
-  [key: string]: unknown;
-};
-
-function buildHooksJson(): HooksFile {
-  const command = hooksCommand();
-  const entry = [{ command }];
-  return {
-    version: 1,
-    hooks: {
-      sessionStart: entry,
-      beforeShellExecution: entry,
-      afterShellExecution: entry,
-      sessionEnd: entry,
-    },
-  };
-}
-
-function isWatchtyHookEntry(entry: unknown): boolean {
-  return (
-    typeof entry === "object" &&
-    entry !== null &&
-    "command" in entry &&
-    typeof (entry as HookEntry).command === "string" &&
-    (entry as HookEntry).command.includes("watchty")
-  );
-}
-
-/** Insert/update watchty hook entries without dropping unrelated hooks. */
-function mergeWatchtyHooks(existing: HooksFile, ours: HooksFile): HooksFile {
-  const hooks: Record<string, unknown> = { ...(existing.hooks ?? {}) };
-  for (const [event, entries] of Object.entries(ours.hooks ?? {})) {
-    const current = Array.isArray(hooks[event])
-      ? ([...(hooks[event] as HookEntry[])] as HookEntry[])
-      : [];
-    const kept = current.filter((e) => !isWatchtyHookEntry(e));
-    const oursEntries = Array.isArray(entries) ? (entries as HookEntry[]) : [];
-    hooks[event] = [...kept, ...oursEntries];
-  }
-  return {
-    ...existing,
-    version: existing.version ?? ours.version ?? 1,
-    hooks,
-  };
 }
 
 function getSessionByPrefix(prefix: string, scope: Scope = { workspace: null }) {
@@ -416,131 +360,6 @@ async function cmdCleanup(argv: string[]): Promise<void> {
 
   const result = cleanupSessions({ ttlMs, dryRun });
   console.log(describeCleanup(result));
-}
-
-async function cmdInstallHooks(force = false): Promise<void> {
-  const hooksPath = join(homedir(), ".cursor", "hooks.json");
-  mkdirSync(join(homedir(), ".cursor"), { recursive: true });
-  const ours = buildHooksJson();
-
-  if (!existsSync(hooksPath)) {
-    writeFileSync(hooksPath, JSON.stringify(ours, null, 2) + "\n", "utf8");
-    console.log(`Wrote ${hooksPath}`);
-    console.log(`command: ${hooksCommand()}`);
-    return;
-  }
-
-  const raw = readFileSync(hooksPath, "utf8");
-  let existing: HooksFile;
-  try {
-    existing = JSON.parse(raw) as HooksFile;
-  } catch {
-    if (!force) {
-      console.error(
-        `${hooksPath} is not valid JSON.\n` +
-          `Fix it, or re-run: watchty install-hooks --force`,
-      );
-      process.exitCode = 1;
-      return;
-    }
-    writeFileSync(hooksPath, JSON.stringify(ours, null, 2) + "\n", "utf8");
-    console.log(`Wrote ${hooksPath} (--force, replaced invalid JSON)`);
-    console.log(`command: ${hooksCommand()}`);
-    return;
-  }
-
-  if (!raw.includes("watchty") && !force) {
-    console.error(
-      `${hooksPath} already exists and is not ours.\n` +
-        `Merge manually, or re-run: watchty install-hooks --force\n` +
-        `(--force merges watchty in; other hooks are preserved)`,
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  const merged = mergeWatchtyHooks(existing, ours);
-  writeFileSync(hooksPath, JSON.stringify(merged, null, 2) + "\n", "utf8");
-  console.log(`Updated watchty hooks in ${hooksPath} (other hooks preserved)`);
-  console.log(`command: ${hooksCommand()}`);
-}
-
-async function cmdDoctor(): Promise<void> {
-  const checks: { name: string; ok: boolean; detail: string }[] = [];
-
-  const bunPath = Bun.which("bun");
-  checks.push({
-    name: "bun",
-    ok: Boolean(bunPath),
-    detail: bunPath ?? "bun not on PATH",
-  });
-
-  const bin = selfBin();
-  checks.push({
-    name: "cli",
-    ok: true,
-    detail: bin,
-  });
-
-  const linked = Bun.which("watchty");
-  checks.push({
-    name: "PATH binary",
-    ok: Boolean(linked),
-    detail: linked
-      ? linked
-      : `not linked — run: cd ${packageRoot()} && bun link`,
-  });
-
-  const g = ghosttyAvailable();
-  checks.push({ name: "Ghostty AppleScript", ok: g.ok, detail: g.detail });
-
-  const hooksPath = join(homedir(), ".cursor", "hooks.json");
-  let hooksOk = false;
-  let hooksDetail = `${hooksPath} missing — run: watchty install-hooks`;
-  if (existsSync(hooksPath)) {
-    try {
-      const raw = readFileSync(hooksPath, "utf8");
-      hooksOk = raw.includes("watchty");
-      hooksDetail = hooksOk
-        ? `wired in ${hooksPath}`
-        : `${hooksPath} exists but does not mention watchty — run install-hooks --force or merge`;
-    } catch (e) {
-      hooksDetail = String(e);
-    }
-  }
-  checks.push({ name: "hooks.json", ok: hooksOk, detail: hooksDetail });
-
-  const cfg = loadConfig();
-  checks.push({
-    name: "config",
-    ok: true,
-    detail: `${CONFIG_PATH} autoOpen=${cfg.autoOpen} background=${cfg.background} focus=${cfg.focus} ttl=${formatTtl(Math.round(cfg.ttlHours * 3_600_000))}`,
-  });
-
-  checks.push({
-    name: "data dir",
-    ok: true,
-    detail: `${ROOT} (state: ${STATE_PATH}, logs: ${SESSIONS_DIR})`,
-  });
-
-  let failed = false;
-  for (const c of checks) {
-    const mark = c.ok ? "ok" : "!!";
-    console.log(`[${mark}] ${c.name}: ${c.detail}`);
-    if (!c.ok) failed = true;
-  }
-
-  if (!g.ok) {
-    console.log(
-      "\nHint: System Settings → Privacy & Security → Automation — allow the app running hooks (Cursor) to control Ghostty.",
-    );
-  }
-  if (!linked) {
-    console.log(`\nInstall: cd ${packageRoot()} && bun link`);
-  }
-
-  console.log(`\nExample: watchty view "Fix login"`);
-  if (failed) process.exitCode = 1;
 }
 
 async function main(): Promise<void> {
