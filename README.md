@@ -20,7 +20,7 @@ Pull-only viewing works in iTerm, Terminal.app, Kitty, WezTerm, Alacritty, etc.
 Needs [Bun](https://bun.sh). One-liner (global CLI on PATH — needed so Cursor hooks can find it):
 
 ```bash
-bun add -g github:skyaara/watchty
+bun add -g @rayyyyyofsun/watchty
 watchty install-hooks
 watchty doctor
 ```
@@ -28,11 +28,11 @@ watchty doctor
 Or try without installing:
 
 ```bash
-bunx github:skyaara/watchty doctor
-bunx github:skyaara/watchty help
+bunx @rayyyyyofsun/watchty doctor
+bunx @rayyyyyofsun/watchty help
 ```
 
-For hooks, prefer `bun add -g` (or `bun link` from a clone) so `~/.cursor/hooks.json` points at a stable binary, not a temporary `bunx` cache path.
+For hooks, prefer `bun add -g` (or `bun link` from a clone) so `~/.cursor/hooks.json` points at a stable binary, not a temporary `bunx` cache path. Git install still works: `bun add -g github:skyaara/watchty`.
 
 From a clone (dev):
 
