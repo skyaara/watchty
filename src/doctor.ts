@@ -7,6 +7,10 @@ import { ghosttyAvailable } from "./ghostty";
 import { packageRoot, selfBin } from "./hook";
 import { ROOT, STATE_PATH, SESSIONS_DIR } from "./paths";
 
+function cursorDir(): string {
+  return process.env.WATCHTY_CURSOR_DIR?.trim() || join(homedir(), ".cursor");
+}
+
 export async function cmdDoctor(): Promise<void> {
   const checks: { name: string; ok: boolean; detail: string }[] = [];
 
@@ -36,7 +40,7 @@ export async function cmdDoctor(): Promise<void> {
   const g = ghosttyAvailable();
   checks.push({ name: "Ghostty AppleScript", ok: g.ok, detail: g.detail });
 
-  const hooksPath = join(homedir(), ".cursor", "hooks.json");
+  const hooksPath = join(cursorDir(), "hooks.json");
   let hooksOk = false;
   let hooksDetail = `${hooksPath} missing — run: watchty install-hooks`;
   if (existsSync(hooksPath)) {

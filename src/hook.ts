@@ -6,12 +6,12 @@ import { openSessionTab, focusSessionTab, terminalAlive } from "./ghostty";
 import { resolveSessionTitle } from "./session-name";
 import { resolvedSettings } from "./config";
 import { maybeAutoCleanup } from "./cleanup";
+import { detectCursorWorkspace } from "./workspace";
 import {
   appendEvent,
   claimViewer,
   getSession,
   releaseViewer,
-  resolveWorkspace,
   setPendingCmd,
   takePendingCmd,
   upsertSession,
@@ -25,6 +25,8 @@ export type HookPayload = {
   cwd?: string;
   command?: string;
   output?: string;
+  /** User message text from beforeSubmitPrompt */
+  prompt?: string;
   // Optional name fields if Cursor ever sends them
   session_name?: string;
   title?: string;
@@ -87,6 +89,20 @@ function hintFromPayload(payload: HookPayload): string | undefined {
   return typeof hint === "string" && hint.trim() ? hint.trim() : undefined;
 }
 
+/**
+ * Prefer Cursor workspace_roots; fall back to detecting a project from cwd.
+ * sessionStart on a brand-new chat often omits workspace_roots.
+ */
+function workspaceFromPayload(payload: HookPayload): string | undefined {
+  const roots = payload.workspace_roots;
+  if (roots?.length) return roots[0];
+  if (typeof payload.cwd === "string" && payload.cwd.trim()) {
+    const fromCwd = detectCursorWorkspace(payload.cwd.trim());
+    if (fromCwd) return fromCwd;
+  }
+  return detectCursorWorkspace(process.cwd());
+}
+
 function refreshTitle(sessionId: string, workspace?: string, hint?: string): string {
   const title = resolveSessionTitle({
     conversationId: sessionId,
@@ -99,9 +115,13 @@ function refreshTitle(sessionId: string, workspace?: string, hint?: string): str
 
 /**
  * Open at most one Ghostty tab per conversation_id (lock file prevents races
- * between sessionStart and beforeShellExecution).
+ * between beforeSubmitPrompt and beforeShellExecution).
  * If the previous tab was closed (dead terminalId), clear the claim and reopen.
  * In-flight claims (viewerClaimed / lock, no terminal yet) are left alone.
+ *
+ * Called on first prompt / shell — not sessionStart — so empty new-chat tabs
+ * (agent-{hash} with no title or commands) never open, and a later prompt
+ * can't orphan a stale tab by opening a second one.
  *
  * With WATCHTY_AUTO_OPEN=0, skip opening — events still land in jsonl
  * for a pull-based `watchty view` from Ghostty.
@@ -122,7 +142,7 @@ function ensureTab(sessionId: string, workspace?: string, hint?: string): void {
 
   // Only release when we know the previous tab is dead. Never release merely
   // because viewerClaimed is set — that races with an in-flight open and can
-  // spawn a second Ghostty tab (sessionStart vs beforeShellExecution).
+  // spawn a second Ghostty tab (beforeSubmitPrompt vs beforeShellExecution).
   if (existing?.terminalId) {
     releaseViewer(sessionId);
   }
@@ -173,12 +193,15 @@ export async function handleHook(payload: HookPayload): Promise<void> {
     maybeAutoCleanup();
   }
 
-  const workspace = resolveWorkspace(payload.workspace_roots);
+  const workspace = workspaceFromPayload(payload);
   const hint = hintFromPayload(payload);
   const now = new Date().toISOString();
 
   switch (event) {
     case "sessionStart": {
+      // Record only — do not open Ghostty yet. New chats often have no title /
+      // workspace, and opening here leaves a stale agent-{hash} tab when the
+      // first prompt later opens a properly named one.
       const title = refreshTitle(id, workspace, hint);
       appendEvent(id, {
         type: "session_start",
@@ -186,7 +209,28 @@ export async function handleHook(payload: HookPayload): Promise<void> {
         title,
         workspace,
       });
+      break;
+    }
+    case "beforeSubmitPrompt": {
+      const generationId =
+        typeof payload.generation_id === "string" && payload.generation_id
+          ? payload.generation_id
+          : undefined;
+      const promptText =
+        typeof payload.prompt === "string" ? payload.prompt.trim() : "";
+      refreshTitle(id, workspace, hint);
+      if (generationId && promptText) {
+        appendEvent(id, {
+          type: "prompt",
+          at: now,
+          generationId,
+          prompt: promptText,
+        });
+      }
+      // First real attach point: user submitted a prompt (title usually known).
       ensureTab(id, workspace, hint);
+      // Always allow — we only observe. Matcher UserPromptSubmit is optional.
+      process.stdout.write(JSON.stringify({ continue: true }) + "\n");
       break;
     }
     case "beforeShellExecution": {
@@ -205,6 +249,8 @@ export async function handleHook(payload: HookPayload): Promise<void> {
             : undefined,
       });
       setPendingCmd(id, cmdId);
+      // Fallback if beforeSubmitPrompt isn't hooked (older installs); no-ops
+      // when the prompt hook already opened a live tab.
       ensureTab(id, workspace, hint);
       if (shouldFocus()) {
         const s = getSession(id);

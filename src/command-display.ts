@@ -96,10 +96,7 @@ function pickLabel(lines: string[]): string {
     },
   );
 
-  if (lines.length > 2) {
-    return `${lines.length} steps · ${truncate(label, 48)}`;
-  }
-  return label;
+  return truncate(label, 56);
 }
 
 function truncate(s: string, n: number): string {

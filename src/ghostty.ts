@@ -8,7 +8,15 @@ export type OpenTabResult = {
   error?: string;
 };
 
-function runOsascript(script: string): { ok: boolean; stdout: string; stderr: string } {
+type OsascriptResult = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+};
+
+type OsascriptRunner = (script: string) => OsascriptResult;
+
+function defaultOsascriptRunner(script: string): OsascriptResult {
   const result = spawnSync("osascript", ["-e", script], {
     encoding: "utf8",
     timeout: 15_000,
@@ -18,6 +26,21 @@ function runOsascript(script: string): { ok: boolean; stdout: string; stderr: st
     stdout: (result.stdout ?? "").trim(),
     stderr: (result.stderr ?? "").trim() || result.error?.message || "",
   };
+}
+
+let osascriptRunner: OsascriptRunner = defaultOsascriptRunner;
+
+/** Replace osascript for tests; call `resetOsascriptRunner()` in afterEach. */
+export function setOsascriptRunner(runner: OsascriptRunner): void {
+  osascriptRunner = runner;
+}
+
+export function resetOsascriptRunner(): void {
+  osascriptRunner = defaultOsascriptRunner;
+}
+
+function runOsascript(script: string): OsascriptResult {
+  return osascriptRunner(script);
 }
 
 function escapeAs(str: string): string {
@@ -89,11 +112,14 @@ export function openSessionTab(opts: {
   const background = Boolean(opts.background);
   const selectNew = Boolean(opts.select);
 
+  // Mark auto-opened viewer tabs so `q` can hand off to a normal shell
+  // instead of closing the surface (pull-mode `watchty view` stays unmarked).
   const script = `
 tell application "Ghostty"
   ${background ? "" : "activate"}
   set cfg to new surface configuration
   set command of cfg to "${cmd}"
+  set environment variables of cfg to {"WATCHTY_OWNED_SURFACE=1"}
   ${cwd ? `set initial working directory of cfg to "${cwd}"` : ""}
 
   set winCount to count of windows

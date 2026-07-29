@@ -2,7 +2,10 @@ node_modules/
 .DS_Store
 *.log
 dist/
+coverage/
 .env
 *.tgz
 .idea/
 .vscode/
+# Disposable dirs created by the test suite
+tests/.tmp-homes/

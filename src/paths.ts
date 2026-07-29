@@ -13,6 +13,8 @@ const LEGACY_ROOT = join(HOME, ".cursor", "agent-ghostty");
  * ~/.cursor/watchty/completions (or an empty watchty dir) doesn’t hide sessions.
  */
 function resolveRoot(): string {
+  const fromEnv = process.env.WATCHTY_ROOT;
+  if (fromEnv) return fromEnv;
   if (existsSync(join(NEW_ROOT, "state.json"))) return NEW_ROOT;
   if (existsSync(join(LEGACY_ROOT, "state.json"))) return LEGACY_ROOT;
   if (existsSync(join(NEW_ROOT, "sessions"))) return NEW_ROOT;
@@ -33,7 +35,7 @@ export function workspaceWindowTitle(workspace?: string): string {
 }
 
 /** Resolve `.` / relative paths; best-effort realpath. */
-export function resolveWorkspaceQuery(query: string): string {
+function resolveWorkspaceQuery(query: string): string {
   const raw = query.trim();
   if (!raw || raw === ".") return process.cwd();
   const withHome = raw.replace(/^~(?=\/|$)/, HOME);

@@ -44,7 +44,7 @@ function unlinkQuiet(path: string): void {
 }
 
 /** Remove one session from state + on-disk artifacts. */
-export function deleteSession(id: string): void {
+function deleteSession(id: string): void {
   ensureDirs();
   let eventsPath = sessionEventsPath(id);
   mutateState((state) => {

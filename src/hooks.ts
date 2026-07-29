@@ -3,7 +3,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { selfBin } from "./hook";
 
-export function hooksCommand(): string {
+/** ~/.cursor, or WATCHTY_CURSOR_DIR for tests / alternate installs. */
+function cursorDir(): string {
+  return process.env.WATCHTY_CURSOR_DIR?.trim() || join(homedir(), ".cursor");
+}
+
+function hooksCommand(): string {
   const linked = Bun.which("watchty");
   if (linked) return `${linked} hook`;
   return `${selfBin()} hook`;
@@ -16,13 +21,14 @@ type HooksFile = {
   [key: string]: unknown;
 };
 
-export function buildHooksJson(): HooksFile {
+function buildHooksJson(): HooksFile {
   const command = hooksCommand();
   const entry = [{ command }];
   return {
     version: 1,
     hooks: {
       sessionStart: entry,
+      beforeSubmitPrompt: entry,
       beforeShellExecution: entry,
       afterShellExecution: entry,
       sessionEnd: entry,
@@ -31,13 +37,17 @@ export function buildHooksJson(): HooksFile {
 }
 
 function isWatchtyHookEntry(entry: unknown): boolean {
-  return (
-    typeof entry === "object" &&
-    entry !== null &&
-    "command" in entry &&
-    typeof (entry as HookEntry).command === "string" &&
-    (entry as HookEntry).command.includes("watchty")
-  );
+  if (
+    typeof entry !== "object" ||
+    entry === null ||
+    !("command" in entry) ||
+    typeof (entry as HookEntry).command !== "string"
+  ) {
+    return false;
+  }
+  const cmd = (entry as HookEntry).command;
+  // Current name + pre-rename binary still lingering in some hooks.json files.
+  return cmd.includes("watchty") || cmd.includes("cursor-agent-ghostty");
 }
 
 /** Insert/update watchty hook entries without dropping unrelated hooks. */
@@ -59,8 +69,9 @@ export function mergeWatchtyHooks(existing: HooksFile, ours: HooksFile): HooksFi
 }
 
 export async function cmdInstallHooks(force = false): Promise<void> {
-  const hooksPath = join(homedir(), ".cursor", "hooks.json");
-  mkdirSync(join(homedir(), ".cursor"), { recursive: true });
+  const dir = cursorDir();
+  const hooksPath = join(dir, "hooks.json");
+  mkdirSync(dir, { recursive: true });
   const ours = buildHooksJson();
 
   if (!existsSync(hooksPath)) {

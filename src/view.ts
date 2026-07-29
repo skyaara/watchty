@@ -1,260 +1,43 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { setGhosttyTitles, ensureShellSplit, shellCd, focusShell } from "./ghostty";
 import { shortId } from "./paths";
 import { resolveSessionTitle, setTerminalTitle } from "./session-name";
-import { cleanCommand } from "./command-display";
+import {
+  BOLD,
+  DIM,
+  RESET,
+  buildPanelLines,
+  buildPromptHeader,
+  buildSidebarItems,
+  clipVisible,
+  homeify,
+  sidebarLabelText,
+  statusGlyph,
+  truncatePlain,
+  truncateStyled,
+} from "./view-layout";
 import {
   eventsToCommands,
+  eventsToPrompts,
   getSession,
   loadEvents,
+  releaseViewer,
   sessionEventsPath,
   upsertSession,
   type CommandRow,
 } from "./store";
-import { existsSync, statSync } from "node:fs";
 
-const RESET = "\x1b[0m";
-const BOLD = "\x1b[1m";
-const DIM = "\x1b[2m";
+/** Set by Ghostty when hooks auto-open a dedicated viewer surface. */
+const OWNED_SURFACE = process.env.WATCHTY_OWNED_SURFACE === "1";
+
 const REVERSE = "\x1b[7m";
-/** Theme-mapped ANSI (Ghostty remaps these; avoid 256/truecolor). */
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
-const YELLOW = "\x1b[33m";
-const CYAN = "\x1b[36m";
 const CLEAR = "\x1b[2J\x1b[H";
 const HIDE = "\x1b[?25l";
 const SHOW = "\x1b[?25h";
 
 const SIDEBAR_MAX = 28;
 const SIDEBAR_MIN = 18;
-
-/**
- * 2x2 = 4 braille dots (dots 1,4,2,5):
- *   1 4
- *   2 5
- * Same pixel-dot feel as before, constrained to four dots.
- */
-const DOTS_2X2_FRAMES = [
-  "⠁", // TL (1)
-  "⠈", // TR (4)
-  "⠐", // BR (5)
-  "⠂", // BL (2)
-  "⠉", // top (1+4)
-  "⠘", // right (4+5)
-  "⠒", // bottom (2+5)
-  "⠓", // left (1+2+5) — close enough; ⠋ is 1+2+3+5
-  "⠛", // all four (1+2+4+5)
-  "⠒",
-  "⠉",
-  "⠂",
-] as const;
-
-/** 3x3 braille-style dots — patterns as 9 chars of 0/1, row-major. */
-const DOTS_3X3_FRAMES = [
-  "100000000",
-  "010000000",
-  "001000000",
-  "000010000",
-  "000001000",
-  "000000001",
-  "000000010",
-  "000000100",
-  "000100000",
-  "010000000",
-  "111000000",
-  "111111000",
-  "111111111",
-  "011111111",
-  "000111111",
-  "000000111",
-  "000000000",
-] as const;
-
-function dots2x2Frame(): string {
-  return DOTS_2X2_FRAMES[Math.floor(Date.now() / 100) % DOTS_2X2_FRAMES.length]!;
-}
-
-/**
- * Pack a 3x3 boolean grid into 3 braille chars on one line.
- * Each char is one column (dots 1/2/3 = top/mid/bot).
- */
-function dots3x3Inline(): string {
-  const raw =
-    DOTS_3X3_FRAMES[Math.floor(Date.now() / 110) % DOTS_3X3_FRAMES.length]!;
-  const col = (c: number) => {
-    let bits = 0;
-    if (raw[c] === "1") bits |= 0x01; // row0 → dot 1
-    if (raw[3 + c] === "1") bits |= 0x02; // row1 → dot 2
-    if (raw[6 + c] === "1") bits |= 0x04; // row2 → dot 3
-    return String.fromCharCode(0x2800 + bits);
-  };
-  return `${YELLOW}${col(0)}${col(1)}${col(2)}${RESET}`;
-}
-
-/** Sidebar: green • if ok, ! if failed, 4-dot braille if running. */
-function statusGlyph(cmd: CommandRow, selected: boolean): string {
-  // When selected, omit RESET so reverse-video selection can wrap the whole row.
-  const end = selected ? "" : RESET;
-  if (cmd.running) {
-    return `${YELLOW}${dots2x2Frame()}${end}`;
-  }
-  const ok = cmd.exitCode === 0 || cmd.exitCode == null;
-  if (ok) return `${GREEN}•${end}`;
-  return `${RED}!${end}`;
-}
-
-function runningBannerLine(): string {
-  return `${dots3x3Inline()} ${DIM}running${RESET}`;
-}
-
-/** True when curr starts a new agent prompt relative to prev. */
-function isNewPrompt(prev: CommandRow, curr: CommandRow): boolean {
-  if (prev.generationId && curr.generationId) {
-    return prev.generationId !== curr.generationId;
-  }
-  // Legacy events without generationId: split on ~90s idle gaps
-  const ta = Date.parse(prev.startedAt);
-  const tb = Date.parse(curr.startedAt);
-  if (Number.isFinite(ta) && Number.isFinite(tb)) {
-    return tb - ta >= 90_000;
-  }
-  return false;
-}
-
-type SidebarItem = { kind: "sep" } | { kind: "cmd"; index: number };
-
-function buildSidebarItems(cmds: CommandRow[]): SidebarItem[] {
-  const items: SidebarItem[] = [];
-  for (let i = 0; i < cmds.length; i++) {
-    if (i > 0 && isNewPrompt(cmds[i - 1]!, cmds[i]!)) {
-      items.push({ kind: "sep" });
-    }
-    items.push({ kind: "cmd", index: i });
-  }
-  return items;
-}
-
-/** Short label for sidebar from cleaned command (no truncation — caller clips). */
-function sidebarLabelText(command: string): string {
-  const { label } = cleanCommand(command);
-  const flat = label.replace(/\s+/g, " ").trim();
-  if (!flat) return "(cmd)";
-  if (flat.includes(" steps ") || /\d+\s+steps\s+·/.test(flat)) return flat;
-  const first = flat.split(" ")[0] ?? flat;
-  const base = first.includes("/") ? (first.split("/").pop() ?? first) : first;
-  const rest = flat.slice(first.length).trim();
-  return rest ? `${base} ${rest}` : base;
-}
-
-/** Fit plain text into `n` columns, trailing with `...` when clipped. */
-function truncatePlain(s: string, n: number): string {
-  if (n <= 0) return "";
-  if (s.length <= n) return s;
-  if (n <= 3) return ".".repeat(n);
-  return s.slice(0, n - 3) + "...";
-}
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
-function visibleLen(s: string): number {
-  return stripAnsi(s).length;
-}
-
-/** Clip a possibly-styled string to exactly n visible columns. */
-function clipVisible(s: string, n: number): string {
-  const plain = stripAnsi(s);
-  if (plain.length <= n) return s + " ".repeat(n - plain.length);
-  return truncatePlain(plain, n);
-}
-
-function homeify(p?: string): string {
-  if (!p) return "";
-  const home = process.env.HOME;
-  if (home && p.startsWith(home)) return "~" + p.slice(home.length);
-  return p;
-}
-
-function buildPanelLines(cmd: CommandRow | undefined, width: number): string[] {
-  if (!cmd) {
-    return [`${DIM}  select a command from the sidebar${RESET}`];
-  }
-
-  const cwd = homeify(cmd.cwd) || ".";
-  const cleaned = cleanCommand(cmd.command);
-  const lines: string[] = [];
-
-  // Ghostty-style prompt: ~/path % command  (then stdout below)
-  const promptMark = cmd.running
-    ? `${YELLOW}%${RESET}`
-    : cmd.exitCode && cmd.exitCode !== 0
-      ? `${RED}%${RESET}`
-      : `${GREEN}%${RESET}`;
-
-  const promptPrefix = `${DIM}${cwd}${RESET} ${promptMark} `;
-  const cmdLines = cleaned.display.split("\n");
-  for (let li = 0; li < cmdLines.length; li++) {
-    const line = cmdLines[li]!;
-    const prefix = li === 0 ? promptPrefix : "  ";
-    const wrapW = Math.max(8, width - visibleLen(prefix) - 1);
-    let remaining = line;
-    let firstChunk = true;
-    while (remaining.length > 0 || firstChunk) {
-      const chunk = remaining.slice(0, wrapW);
-      remaining = remaining.slice(wrapW);
-      // Command in cyan so it stands apart from stdout
-      lines.push(
-        `${firstChunk ? prefix : "  "}${CYAN}${BOLD}${chunk}${RESET}`,
-      );
-      firstChunk = false;
-      if (!remaining) break;
-    }
-  }
-
-  if (cleaned.display !== cleaned.raw && cleaned.raw.includes("export PATH")) {
-    lines.push(`${DIM}(env preamble hidden)${RESET}`);
-  }
-
-  lines.push("");
-
-  // Stdout — default fg (preserves any ANSI in captured output)
-  if (cmd.running && !cmd.output) {
-    lines.push(runningBannerLine());
-  } else if (!cmd.output) {
-    lines.push(`${DIM}(no output)${RESET}`);
-  } else {
-    for (const line of cmd.output.replace(/\n$/, "").split("\n")) {
-      // Soft dim only when the line has no its own colors
-      if (line.includes("\x1b[")) {
-        lines.push(line);
-      } else {
-        lines.push(`${DIM}${line}${RESET}`);
-      }
-    }
-    if (cmd.running) {
-      lines.push(runningBannerLine());
-    }
-  }
-
-  lines.push("");
-  if (!cmd.running) {
-    const code = cmd.exitCode;
-    const ok = code === 0 || code == null;
-    if (!ok) {
-      const status = `exit ${code}`;
-      const dur =
-        cmd.durationMs != null ? `${DIM} · ${cmd.durationMs}ms${RESET}` : "";
-      lines.push(`${RED}${BOLD}! ${status}${RESET}${dur}`);
-    } else if (cmd.durationMs != null) {
-      lines.push(`${DIM}exit 0 · ${cmd.durationMs}ms${RESET}`);
-    } else {
-      lines.push(`${DIM}exit 0${RESET}`);
-    }
-  }
-
-  return lines;
-}
 
 /**
  * Turborepo-style TUI: left = truncated commands, right = cwd + full command + output.
@@ -276,6 +59,7 @@ export async function viewSession(id: string): Promise<void> {
   let sidebarScroll = 0;
   let lastSize = -1;
   let cmds: CommandRow[] = [];
+  let promptsByGen = new Map<string, string>();
   let title =
     resolveSessionTitle({
       conversationId: id,
@@ -311,6 +95,7 @@ export async function viewSession(id: string): Promise<void> {
   const refresh = () => {
     const events = loadEvents(id);
     cmds = eventsToCommands(events);
+    promptsByGen = eventsToPrompts(events);
     const startEv = events.find((e) => e.type === "session_start");
     const fromCursor = resolveSessionTitle({
       conversationId: id,
@@ -336,7 +121,7 @@ export async function viewSession(id: string): Promise<void> {
     const footerRows = 1;
     const bodyRows = Math.max(1, rows - headerRows - footerRows);
 
-    const sidebarItems = buildSidebarItems(cmds);
+    const sidebarItems = buildSidebarItems(cmds, promptsByGen);
     const selectedItem = sidebarItems.findIndex(
       (it) => it.kind === "cmd" && it.index === selected,
     );
@@ -349,8 +134,15 @@ export async function viewSession(id: string): Promise<void> {
     }
 
     const current = cmds[selected];
+    const promptText = current?.generationId
+      ? promptsByGen.get(current.generationId)
+      : undefined;
+    const promptHeader = buildPromptHeader(promptText, rightW);
+    const promptRows = promptHeader.length;
+    const panelBodyRows = Math.max(1, bodyRows - promptRows);
+
     const panelLines = buildPanelLines(current, rightW);
-    const maxScroll = Math.max(0, panelLines.length - bodyRows);
+    const maxScroll = Math.max(0, panelLines.length - panelBodyRows);
     if (outputScroll > maxScroll) outputScroll = maxScroll;
 
     const lines: string[] = [];
@@ -367,8 +159,26 @@ export async function viewSession(id: string): Promise<void> {
 
       if (!item) {
         left = " ".repeat(sidebarW);
-      } else if (item.kind === "sep") {
+      } else if (item.kind === "rule") {
         left = `${DIM}${"─".repeat(sidebarW)}${RESET}`;
+      } else if (item.kind === "prompt") {
+        // Label only — do not extend ─ into leftover sidebar width
+        const nextCmd = sidebarItems
+          .slice(sidebarScroll + i + 1)
+          .find((it) => it.kind === "cmd");
+        const nextIdx = nextCmd && nextCmd.kind === "cmd" ? nextCmd.index : -1;
+        const gen = nextIdx >= 0 ? cmds[nextIdx]?.generationId : undefined;
+        const sepPrompt = gen ? promptsByGen.get(gen) : undefined;
+        if (sepPrompt) {
+          const label = truncatePlain(
+            ` ${sepPrompt.replace(/\s+/g, " ")} `,
+            sidebarW,
+          );
+          // Default fg + bold — theme foreground, not a palette slot
+          left = clipVisible(`${BOLD}${label}${RESET}`, sidebarW);
+        } else {
+          left = " ".repeat(sidebarW);
+        }
       } else {
         const cmd = cmds[item.index]!;
         const active = item.index === selected;
@@ -384,7 +194,12 @@ export async function viewSession(id: string): Promise<void> {
         }
       }
 
-      const panelLine = panelLines[i + outputScroll] ?? "";
+      let panelLine: string;
+      if (i < promptRows) {
+        panelLine = promptHeader[i]!;
+      } else {
+        panelLine = panelLines[i - promptRows + outputScroll] ?? "";
+      }
       const rightPlain = panelLine.replace(/\x1b\[[0-9;]*m/g, "");
       const right =
         rightPlain.length >= rightW
@@ -395,9 +210,10 @@ export async function viewSession(id: string): Promise<void> {
     }
 
     const cwdHint = current ? homeify(current.cwd) || "." : "";
+    const quitHint = OWNED_SURFACE ? "q shell" : "q quit";
     const footer = current
-      ? ` ↑↓ select  u/d scroll pane  f follow  i shell  q quit  ${DIM}${cwdHint}${RESET}`
-      : ` waiting for shell commands…  i shell  q quit `;
+      ? ` ↑↓ select  u/d scroll pane  f follow  i shell  ${quitHint}  ${DIM}${cwdHint}${RESET}`
+      : ` waiting for shell commands…  i shell  ${quitHint} `;
     lines.push(`${DIM}${truncatePlain(footer.replace(/\x1b\[[0-9;]*m/g, ""), cols)}${RESET}`);
 
     stdout.write(CLEAR + lines.join("\n"));
@@ -451,10 +267,72 @@ export async function viewSession(id: string): Promise<void> {
     focusShell(shellTerminalId);
   };
 
+  /**
+   * Leave the TUI for a normal shell.
+   * - Auto-opened Ghostty surface: replace this process with a login shell in the same pane
+   *   (parent is Ghostty, not zsh — safe). Split+exit closes the whole tab.
+   * - Manual `watchty view`: restore TTY and return to the parent shell (never nest a shell —
+   *   that races zsh job control → "suspended (tty input)").
+   */
+  const quit = () => {
+    const cwd = resolveTargetCwd(cmds[selected]?.cwd);
+    cleanup();
+
+    if (OWNED_SURFACE) {
+      // Prefer an existing `i` shell split: focus it and let this surface exit.
+      if (shellTerminalId) {
+        const result = ensureShellSplit({
+          viewerTerminalId: getSession(id)?.terminalId,
+          shellTerminalId,
+          cwd,
+        });
+        if (result.ok && result.shellTerminalId) {
+          if (!result.created && cwd !== lastShellCwd) {
+            shellCd({ shellTerminalId: result.shellTerminalId, cwd });
+          }
+          focusShell(result.shellTerminalId);
+          releaseViewer(id);
+          process.exit(0);
+        }
+      }
+
+      releaseViewer(id);
+      try {
+        process.chdir(cwd);
+      } catch {
+        // keep cwd
+      }
+      // Pause so we are not competing with the child for the TTY.
+      if (stdin.isTTY) stdin.pause();
+      const shell = process.env.SHELL || "/bin/zsh";
+      const result = spawnSync(shell, ["-l"], {
+        stdio: "inherit",
+        cwd,
+        env: process.env,
+      });
+      process.exit(result.status ?? 1);
+    }
+
+    // Pull-mode: optional focus of an `i` split, then return to the calling shell.
+    if (shellTerminalId) {
+      const result = ensureShellSplit({
+        viewerTerminalId: getSession(id)?.terminalId,
+        shellTerminalId,
+        cwd,
+      });
+      if (result.ok && result.shellTerminalId) {
+        if (!result.created && cwd !== lastShellCwd) {
+          shellCd({ shellTerminalId: result.shellTerminalId, cwd });
+        }
+        focusShell(result.shellTerminalId);
+      }
+    }
+    resolvePromise();
+  };
+
   const onData = (key: string) => {
     if (key === "\u0003" || key === "q") {
-      cleanup();
-      resolvePromise();
+      quit();
       return;
     }
     // Explicit only — selecting a command never makes the main (output) pane interactive
@@ -509,7 +387,8 @@ export async function viewSession(id: string): Promise<void> {
     stdin.off("data", onData);
     stdout.off("resize", onResize);
     if (stdin.isTTY) stdin.setRawMode(false);
-    stdout.write(SHOW + CLEAR);
+    // Show cursor + clear TUI. Trailing newline helps the parent shell redraw a prompt.
+    stdout.write(SHOW + CLEAR + "\n");
   };
 
   refresh();
@@ -517,37 +396,7 @@ export async function viewSession(id: string): Promise<void> {
   await new Promise<void>((resolve) => {
     resolvePromise = resolve;
     stdin.on("data", onData);
-    process.on("SIGINT", () => {
-      cleanup();
-      resolve();
-    });
-    process.on("SIGTERM", () => {
-      cleanup();
-      resolve();
-    });
+    process.on("SIGINT", () => quit());
+    process.on("SIGTERM", () => quit());
   });
-}
-
-/** Truncate a string that may contain ANSI, by visible width. */
-function truncateStyled(s: string, n: number): string {
-  if (visibleLen(s) <= n) return s;
-  let out = "";
-  let w = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === "\x1b") {
-      const m = s.slice(i).match(/^\x1b\[[0-9;]*m/);
-      if (m) {
-        out += m[0];
-        i += m[0].length - 1;
-        continue;
-      }
-    }
-    if (w >= n - 3) {
-      out += "..." + RESET;
-      break;
-    }
-    out += s[i];
-    w++;
-  }
-  return out;
 }

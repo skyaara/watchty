@@ -57,7 +57,7 @@ mv ~/.cursor/agent-ghostty ~/.cursor/watchty   # optional; watchty also reads th
 
 ### Ghostty (default)
 
-Start an Agent chat and run shell commands. A Ghostty tab opens (without stealing focus by default) and follows:
+Start an Agent chat and submit a prompt. A Ghostty tab opens on the first prompt (not on empty new-chat), without stealing focus by default, and follows:
 
 ```text
 ~/.cursor/watchty/sessions/<conversation_id>.jsonl
@@ -159,11 +159,11 @@ Suggestions follow the same workspace filter as `list`. Complete `-w` values wit
 
 1. Cursor fires session/shell hooks.
 2. Hooks append events to `~/.cursor/watchty/sessions/<id>.jsonl`.
-3. **One** Ghostty tab opens per chat (unless `autoOpen` is false).
+3. **One** Ghostty tab opens per chat on the first prompt (unless `autoOpen` is false).
 4. That tab (or `watchty view` in any terminal) runs a small TUI and polls the jsonl.
 5. TTL cleanup removes old sessions (auto from hooks, or via `cleanup`).
 
-Viewer keys: `↑/↓` or `j/k` select a command, `u/d` scroll, `f` follow latest, `i` / `I` interactive shell split (**Ghostty only**), `q` quit.
+Viewer keys: `↑/↓` or `j/k` select a command, `u/d` scroll, `f` follow latest, `i` / `I` interactive shell split (**Ghostty only**), `q` / Ctrl-C leave the TUI — auto-opened tabs become a login shell in the same pane; `watchty view` returns to your shell.
 
 ## Config
 
@@ -172,7 +172,7 @@ Viewer keys: `↑/↓` or `j/k` select a command, `u/d` scroll, `f` follow lates
 | Key / env | Effect |
 |-----------|--------|
 | `autoOpen` / `WATCHTY_AUTO_OPEN` | Open Ghostty from hooks (default `true`) |
-| `background` / `WATCHTY_BACKGROUND` | Don’t activate Ghostty (default `true`) |
+| `background` / `WATCHTY_BACKGROUND` | Don’t call AppleScript `activate` (default `true`; see [known bug](#known-bug-background-still-steals-focus)) |
 | `focus` / `WATCHTY_FOCUS` | Switch to the new session tab (default `false`) |
 | `ttlHours` / `WATCHTY_TTL` | Auto-delete sessions older than this (default `7d`; `0` = off) |
 
@@ -201,8 +201,20 @@ Hooks can see shell **commands and captured output** from Cursor Agent. watchty 
 
 Nothing is uploaded. Treat that directory like any other local log of terminal activity. Use TTL cleanup (or `watchty cleanup`) to limit retention. Do not commit or share session `.jsonl` files — they may contain secrets from command output.
 
+## Known bug: `background` still steals focus
+
+**With `background: true` (the default), Ghostty can still jump to the front** when a session tab opens — even though watchty deliberately skips AppleScript `activate`.
+
+Cause: Ghostty’s AppleScript `new tab` / `new window` handlers activate the app themselves (`NSApp.activate`). That is upstream, not a watchty config miss. Tracked in [ghostty-org/ghostty#11457](https://github.com/ghostty-org/ghostty/issues/11457); watchty follow-up: [#1](https://github.com/skyaara/watchty/issues/1).
+
+Workarounds until Ghostty ships a fix:
+
+- Leave Ghostty open already (less disruptive than a cold `new window`, but a new tab may still steal focus)
+- Or disable auto-open and attach when you want: `watchty config set autoOpen false`, then `watchty view`
+
 ## Troubleshooting
 
+- Auto-open steals focus despite `background: true` → known Ghostty bug above; not fixed by flipping config
 - `doctor` reports Ghostty AppleScript failure → install Ghostty 1.3+, ensure `macos-applescript` is not disabled, grant Automation. Pull mode (`view`) still works without Ghostty.
 - No tabs but logs exist → `watchty view` in any terminal.
 - Binary not found from hooks → `bun link` and confirm `which watchty`.

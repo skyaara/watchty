@@ -6,6 +6,11 @@
         "command": "watchty hook"
       }
     ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "watchty hook"
+      }
+    ],
     "beforeShellExecution": [
       {
         "command": "watchty hook"

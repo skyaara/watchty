@@ -1,0 +1,29 @@
+{
+  "existing": {
+    "version": 1,
+    "hooks": {
+      "sessionStart": [
+        { "command": "echo custom-start" },
+        { "command": "/old/watchty hook" }
+      ],
+      "beforeShellExecution": [{ "command": "lint-staged" }]
+    }
+  },
+  "ours": {
+    "version": 1,
+    "hooks": {
+      "sessionStart": [{ "command": "/new/watchty hook" }],
+      "sessionEnd": [{ "command": "/new/watchty hook" }]
+    }
+  },
+  "expected": {
+    "hooks": {
+      "sessionStart": [
+        { "command": "echo custom-start" },
+        { "command": "/new/watchty hook" }
+      ],
+      "beforeShellExecution": [{ "command": "lint-staged" }],
+      "sessionEnd": [{ "command": "/new/watchty hook" }]
+    }
+  }
+}

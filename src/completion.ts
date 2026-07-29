@@ -24,7 +24,7 @@ function shortName(s: SessionRecord): string {
  * Default scope: current Cursor workspace when detectable; else all.
  * Pass workspace=`*` / `all` for everything; or an explicit path/name.
  */
-export function sessionAttachSuggestions(
+function sessionAttachSuggestions(
   prefix = "",
   workspace?: string,
 ): string[] {
@@ -68,17 +68,22 @@ export function sessionAttachSuggestions(
     labels.push(label);
   }
 
-  const q = prefix.trim().toLowerCase();
-  if (!q) return labels;
+  // Keep trailing spaces (multi-word Tab after a shared first word).
+  const q = prefix.toLowerCase();
+  if (!q.trim()) return labels;
 
-  return labels.filter((l) => {
+  const pref: string[] = [];
+  const other: string[] = [];
+  for (const l of labels) {
     const lower = l.toLowerCase();
-    return lower.startsWith(q) || lower.includes(q);
-  });
+    if (lower.startsWith(q)) pref.push(l);
+    else if (lower.includes(q.trim())) other.push(l);
+  }
+  return [...pref, ...other];
 }
 
 /** Distinct workspace basenames / paths for `complete workspaces`. */
-export function workspaceSuggestions(prefix = ""): string[] {
+function workspaceSuggestions(prefix = ""): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const s of listSessions()) {
@@ -109,13 +114,13 @@ const COMMANDS = [
   "help",
 ] as const;
 
-export function commandSuggestions(prefix = ""): string[] {
+function commandSuggestions(prefix = ""): string[] {
   const q = prefix.trim().toLowerCase();
   if (!q) return [...COMMANDS];
   return COMMANDS.filter((c) => c.startsWith(q));
 }
 
-export function configKeySuggestions(prefix = ""): string[] {
+function configKeySuggestions(prefix = ""): string[] {
   const keys = ["autoOpen", "background", "focus", "ttl"];
   const q = prefix.trim().toLowerCase();
   if (!q) return keys;
@@ -148,7 +153,7 @@ export function printComplete(args: string[]): void {
     }
     positionals.push(a);
   }
-  const prefix = positionals[0] ?? "";
+  const prefix = positionals.join(" ");
 
   switch (what) {
     case "sessions":
@@ -207,13 +212,14 @@ export function handleCompletionCommand(args: string[]): void {
 }
 
 function zshScript(): string {
+  // _describe … -Q: plain names with spaces (zsh freenode / SO #54478449).
+  // Menu when ambiguous; CLI joins argv so unquoted titles work.
   return `#compdef watchty
 # Install: watchty completion install
 # Or once: eval "$(watchty completion zsh)"
 
 _watchty() {
-  local -a _wty_cmds _wty_sess _wty_keys
-  local expl
+  local -a _wty_cmds _wty_sess _wty_keys _wty_ws
 
   _wty_cmds=(
     'hook:Read Cursor hook JSON from stdin'
@@ -228,7 +234,6 @@ _watchty() {
     'help:Show help'
   )
 
-  # words[1]=watchty, words[2]=subcommand (no -C; avoids $line vs $words bugs)
   if [[ $CURRENT -eq 2 ]]; then
     _describe -t commands 'command' _wty_cmds
     return 0
@@ -237,26 +242,53 @@ _watchty() {
   case \${words[2]} in
     view|focus|list)
       if [[ \${words[CURRENT-1]} == -w || \${words[CURRENT-1]} == --workspace ]]; then
-        local -a _wty_ws
-        _wty_ws=("\${(@f)\$(watchty complete workspaces 2>/dev/null)}")
-        if [[ -n \${_wty_ws[1]} ]]; then
-          _wanted workspaces expl 'workspace' compadd -Q -S '' -- "\${_wty_ws[@]}"
-        fi
+        _wty_ws=("\${(@f)\$(watchty complete workspaces "\${words[CURRENT]}" 2>/dev/null)}")
+        (( \${#_wty_ws[@]} )) && _describe -t workspaces 'workspace' _wty_ws -Q
         return 0
       fi
-      if [[ \${words[CURRENT]} == -* ]]; then
+      if [[ \${words[CURRENT]} == -* || \${words[2]} == list ]]; then
         _values 'flags' --workspace -w --all -a
         return 0
       fi
-      if [[ \${words[2]} == list ]]; then
-        _values 'flags' --workspace -w --all -a
-        return 0
+
+      # First positional after flags; keep later words as part of the title query.
+      local start=3 j q=""
+      while (( start <= CURRENT )); do
+        case \${words[start]} in
+          -w|--workspace) (( start += 2 ));;
+          --workspace=*) (( start += 1 ));;
+          -a|--all) (( start += 1 ));;
+          -*) (( start += 1 ));;
+          *) break;;
+        esac
+      done
+
+      local -a cargs=(complete sessions)
+      for (( j = 3; j < start; j++ )); do
+        case \${words[j]} in
+          -a|--all) cargs+=(--all);;
+          -w|--workspace)
+            (( j + 1 <= $#words )) && cargs+=(--workspace "\${words[j+1]}")
+            (( j++ ))
+            ;;
+          --workspace=*) cargs+=("\${words[j]}");;
+        esac
+      done
+
+      if (( start <= CURRENT )); then
+        q="\${(j: :)words[start,CURRENT]}"
       fi
-      # Sessions for cwd by default (same as CLI)
-      _wty_sess=("\${(@f)\$(watchty complete sessions 2>/dev/null)}")
-      if [[ -n \${_wty_sess[1]} ]]; then
-        _wanted sessions expl 'session' compadd -Q -S '' -- "\${_wty_sess[@]}"
+      if (( start < CURRENT )); then
+        words[start]="\$q"
+        words[start+1,-1]=()
+        CURRENT=\$start
       fi
+
+      _wty_sess=("\${(@f)\$(watchty "\${cargs[@]}" "\$q" 2>/dev/null)}")
+      (( \${#_wty_sess[@]} )) || return 0
+      # Ambiguous → menu-complete full titles (never insert shared "Explore ").
+      (( \${#_wty_sess[@]} > 1 )) && compstate[insert]=menu
+      _describe -t sessions 'session' _wty_sess -Q -U
       return 0
       ;;
     config)
@@ -264,7 +296,7 @@ _watchty() {
         _values 'config' show set get
       elif [[ $CURRENT -eq 4 && \${words[3]} == set ]]; then
         _wty_keys=("\${(@f)\$(watchty complete config-keys 2>/dev/null)}")
-        _wanted keys expl 'key' compadd -S '' -- "\${_wty_keys[@]}"
+        _describe -t keys 'key' _wty_keys
       fi
       return 0
       ;;
@@ -299,62 +331,65 @@ _watchty() {
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
   cmd="\${COMP_WORDS[1]}"
 
-  # Never fall back to file/folder completion for watchty.
   compopt +o default 2>/dev/null
   compopt +o filenames 2>/dev/null
+  # Keep going after a shared first word; CLI joins argv for the title.
   compopt -o nospace 2>/dev/null
 
   if [[ \${COMP_CWORD} -eq 1 ]]; then
-    local cmds
-    cmds="$(watchty complete commands 2>/dev/null)"
-    COMPREPLY=( $(compgen -W "\${cmds}" -- "\${cur}") )
+    COMPREPLY=( $(compgen -W "$(watchty complete commands 2>/dev/null)" -- "\${cur}") )
     return 0
   fi
 
   case "\${cmd}" in
     view|focus|list)
       if [[ "\${prev}" == "-w" || "\${prev}" == "--workspace" ]]; then
-        local IFS=$'\\n'
+        local IFS=$'\\n' line
         COMPREPLY=()
         while IFS= read -r line; do
-          [[ -z "\${line}" ]] && continue
-          COMPREPLY+=("\${line}")
+          [[ -n "\${line}" ]] && COMPREPLY+=("\${line}")
         done < <(watchty complete workspaces "\${cur}" 2>/dev/null)
         return 0
       fi
       if [[ "\${cur}" == -* || "\${cmd}" == list ]]; then
         COMPREPLY=( $(compgen -W "--workspace -w --all -a" -- "\${cur}") )
-        if [[ "\${cmd}" == list ]]; then
-          return 0
-        fi
-        # also allow session names if not only flags
-        if [[ "\${cur}" == -* ]]; then
-          return 0
-        fi
-      fi
-      if [[ "\${cmd}" == list ]]; then
         return 0
       fi
-      local IFS=$'\\n'
+
+      local start=2 i
+      for (( i = 2; i <= COMP_CWORD; i++ )); do
+        case "\${COMP_WORDS[i]}" in
+          -w|--workspace) (( i++ )); continue;;
+          --workspace=*) continue;;
+          -a|--all) continue;;
+          -*) continue;;
+          *) start=\$i; break;;
+        esac
+      done
+
+      local -a cargs=(complete sessions) parts
+      for (( i = 2; i < start; i++ )); do
+        case "\${COMP_WORDS[i]}" in
+          -a|--all) cargs+=(--all);;
+          -w|--workspace)
+            (( i + 1 < \${#COMP_WORDS[@]} )) && cargs+=(--workspace "\${COMP_WORDS[i+1]}")
+            (( i++ ))
+            ;;
+          --workspace=*) cargs+=("\${COMP_WORDS[i]}");;
+        esac
+      done
+
+      parts=()
+      (( start <= COMP_CWORD )) && parts=("\${COMP_WORDS[@]:start:COMP_CWORD-start+1}")
+      local IFS=' '
+      cur="\${parts[*]}"
+      IFS=$'\\n'
+
       local line
       COMPREPLY=()
       while IFS= read -r line; do
-        [[ -z "\${line}" ]] && continue
-        if [[ -z "\${cur}" || "\${line}" == "\${cur}"* || "\${line}" == *"\${cur}"* ]]; then
-          COMPREPLY+=("\${line}")
-        fi
-      done < <(watchty complete sessions "\${cur}" 2>/dev/null)
-      local -a pref other
-      pref=()
-      other=()
-      for line in "\${COMPREPLY[@]}"; do
-        if [[ "\${line}" == "\${cur}"* ]]; then
-          pref+=("\${line}")
-        else
-          other+=("\${line}")
-        fi
-      done
-      COMPREPLY=("\${pref[@]}" "\${other[@]}")
+        [[ -n "\${line}" ]] && COMPREPLY+=("\${line}")
+      done < <(watchty "\${cargs[@]}" "\${cur}" 2>/dev/null)
       return 0
       ;;
     config)
@@ -381,12 +416,12 @@ _watchty() {
   return 0
 }
 
-complete -F _watchty watchty
+complete -o nospace -F _watchty watchty
 `;
 }
 
 /** Write completion into ~/.cursor/watchty and hook the user’s shell rc. */
-export function installCompletion(shellArg?: string): void {
+function installCompletion(shellArg?: string): void {
   const shell = detectShell(shellArg);
   if (shellArg && shellArg !== "zsh" && shellArg !== "bash") {
     console.error("usage: watchty completion install [zsh|bash]");

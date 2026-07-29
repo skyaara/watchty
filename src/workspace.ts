@@ -72,8 +72,3 @@ export function detectCursorWorkspace(cwd = process.cwd()): string | undefined {
 
   return undefined;
 }
-
-/** True when cwd (or an ancestor up to $HOME) looks like a Cursor workspace. */
-export function isCursorWorkspace(cwd = process.cwd()): boolean {
-  return detectCursorWorkspace(cwd) !== undefined;
-}

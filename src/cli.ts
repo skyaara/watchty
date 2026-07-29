@@ -10,7 +10,7 @@ import { focusSessionTab } from "./ghostty";
 import { handleHook, readHookPayload } from "./hook";
 import { cmdInstallHooks } from "./hooks";
 import { cmdDoctor } from "./doctor";
-import { workspaceWindowTitle, workspaceMatches } from "./paths";
+import { workspaceWindowTitle } from "./paths";
 import { getSession, listSessions, type SessionRecord } from "./store";
 import { viewSession } from "./view";
 import { printComplete, handleCompletionCommand } from "./completion";
@@ -119,18 +119,25 @@ function describeScope(scope: Scope): string {
   return workspaceWindowTitle(w) + ` (${w})`;
 }
 
-function getSessionByPrefix(prefix: string, scope: Scope = { workspace: null }) {
-  const sessions = scopedSessions(scope);
-  const exact = getSession(prefix);
-  if (exact) {
-    const w = workspaceOpt(scope);
-    if (!w) return exact; // --all or no Cursor workspace detected
-    if (workspaceMatches(exact.workspace, w)) return exact;
-    return undefined;
-  }
-  const idMatches = sessions.filter((s) => s.id.startsWith(prefix));
-  if (idMatches.length === 1) return idMatches[0];
+/** Chat titles may be typed/completed unquoted; shell splits on spaces. */
+function joinQuery(positionals: string[]): string | undefined {
+  const q = positionals.join(" ").trim();
+  return q || undefined;
+}
 
+function getSessionByPrefix(prefix: string, scope: Scope = { workspace: null }) {
+  // Exact conversation id always wins. Hooks auto-open with full UUIDs, and
+  // sessionStart often arrives before workspace_roots — those sessions have no
+  // workspace yet, so scoped filtering would wrongly reject them.
+  const exact = getSession(prefix);
+  if (exact) return exact;
+
+  // Unique id prefix across all sessions (not workspace-scoped) — same reason.
+  const allIdMatches = listSessions().filter((s) => s.id.startsWith(prefix));
+  if (allIdMatches.length === 1) return allIdMatches[0];
+  if (allIdMatches.length > 1) return undefined;
+
+  const sessions = scopedSessions(scope);
   const q = prefix.trim().toLowerCase();
   if (!q) return undefined;
   const titleMatchesList = sessions.filter((s) => {
@@ -380,7 +387,9 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         break;
       }
-      await cmdView(parsed.scope, parsed.positionals[0]);
+      // Join positionals so unquoted multi-word titles work natively:
+      //   watchty view Explore pane/prompt UI
+      await cmdView(parsed.scope, joinQuery(parsed.positionals));
       break;
     }
     case "list": {
@@ -402,7 +411,7 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         break;
       }
-      const query = parsed.positionals[0];
+      const query = joinQuery(parsed.positionals);
       if (!query) {
         console.error("usage: watchty focus [-w <workspace>|--all] <title|id>");
         process.exitCode = 1;

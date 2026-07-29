@@ -16,6 +16,8 @@
   ],
   "scripts": {
     "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
     "hook": "bun run src/cli.ts hook",
     "doctor": "bun run src/cli.ts doctor",
     "list": "bun run src/cli.ts list",

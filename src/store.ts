@@ -43,6 +43,13 @@ export type SessionEvent =
       workspace?: string;
     }
   | {
+      /** User prompt text from beforeSubmitPrompt — keyed by generationId */
+      type: "prompt";
+      at: string;
+      generationId: string;
+      prompt: string;
+    }
+  | {
       type: "cmd_start";
       id: string;
       at: string;
@@ -200,10 +207,7 @@ function atomicSaveState(state: StateFile): void {
   renameSync(tmp, STATE_PATH);
 }
 
-/**
- * Read-modify-write state.json under an exclusive lock.
- * Prefer this over loadState + saveState for any mutation.
- */
+/** Read-modify-write state.json under an exclusive lock. */
 export function mutateState(fn: (state: StateFile) => void): StateFile {
   ensureDirs();
   const lock = stateLockPath();
@@ -224,21 +228,6 @@ export function mutateState(fn: (state: StateFile) => void): StateFile {
 export function loadState(): StateFile {
   ensureDirs();
   return loadStateUnlocked();
-}
-
-/** Atomic write. Callers doing read-modify-write should use mutateState instead. */
-export function saveState(state: StateFile): void {
-  ensureDirs();
-  const lock = stateLockPath();
-  const fd = acquireFileLock(lock, {
-    waitMs: STATE_LOCK_WAIT_MS,
-    staleMs: STATE_LOCK_STALE_MS,
-  });
-  try {
-    atomicSaveState(state);
-  } finally {
-    releaseFileLock(lock, fd);
-  }
 }
 
 export function getSession(id: string): SessionRecord | undefined {
@@ -478,7 +467,13 @@ export function eventsToCommands(events: SessionEvent[]): CommandRow[] {
   return order.map((id) => map.get(id)!).filter(Boolean);
 }
 
-export function resolveWorkspace(roots?: string[]): string | undefined {
-  if (!roots?.length) return undefined;
-  return roots[0];
+/** Last prompt text per generationId (later events overwrite). */
+export function eventsToPrompts(events: SessionEvent[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.type === "prompt" && ev.generationId && ev.prompt.trim()) {
+      map.set(ev.generationId, ev.prompt.trim());
+    }
+  }
+  return map;
 }
