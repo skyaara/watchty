@@ -26,6 +26,7 @@ import {
   sessionEventsPath,
   upsertSession,
   type CommandRow,
+  type PromptInfo,
 } from "./store";
 
 /** Set by Ghostty when hooks auto-open a dedicated viewer surface. */
@@ -59,7 +60,7 @@ export async function viewSession(id: string): Promise<void> {
   let sidebarScroll = 0;
   let lastSize = -1;
   let cmds: CommandRow[] = [];
-  let promptsByGen = new Map<string, string>();
+  let promptsByGen = new Map<string, PromptInfo>();
   let title =
     resolveSessionTitle({
       conversationId: id,
@@ -134,10 +135,15 @@ export async function viewSession(id: string): Promise<void> {
     }
 
     const current = cmds[selected];
-    const promptText = current?.generationId
+    const promptInfo = current?.generationId
       ? promptsByGen.get(current.generationId)
       : undefined;
-    const promptHeader = buildPromptHeader(promptText, rightW);
+    const promptHeader = buildPromptHeader(
+      promptInfo?.prompt,
+      rightW,
+      undefined,
+      promptInfo?.model,
+    );
     const promptRows = promptHeader.length;
     const panelBodyRows = Math.max(1, bodyRows - promptRows);
 
@@ -168,7 +174,7 @@ export async function viewSession(id: string): Promise<void> {
           .find((it) => it.kind === "cmd");
         const nextIdx = nextCmd && nextCmd.kind === "cmd" ? nextCmd.index : -1;
         const gen = nextIdx >= 0 ? cmds[nextIdx]?.generationId : undefined;
-        const sepPrompt = gen ? promptsByGen.get(gen) : undefined;
+        const sepPrompt = gen ? promptsByGen.get(gen)?.prompt : undefined;
         if (sepPrompt) {
           const label = truncatePlain(
             ` ${sepPrompt.replace(/\s+/g, " ")} `,

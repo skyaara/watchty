@@ -70,8 +70,8 @@ describe("view layout helpers", () => {
         cmd({ id: "3", command: "npm run build", generationId: "g2" }),
       ];
       const prompts = new Map([
-        ["g1", "run tests"],
-        ["g2", "build it"],
+        ["g1", { prompt: "run tests" }],
+        ["g2", { prompt: "build it" }],
       ]);
       expect(buildSidebarItems(cmds, prompts)).toEqual([
         { kind: "prompt" },
@@ -162,6 +162,20 @@ describe("view layout helpers", () => {
     test("buildPromptHeader returns empty for blank or narrow width", () => {
       expect(buildPromptHeader("  ", 40)).toEqual([]);
       expect(buildPromptHeader("hello", 4)).toEqual([]);
+    });
+
+    test("buildPromptHeader appends model name below the prompt", () => {
+      const lines = buildPromptHeader("fix the bug", 40, 2, "claude-opus-4-6");
+      expect(lines).toHaveLength(2);
+      expect(stripAnsi(lines[0]!)).toBe("› fix the bug");
+      expect(stripAnsi(lines[1]!)).toBe("claude-opus-4-6");
+      expect(lines[1]!).toContain(DIM);
+    });
+
+    test("buildPromptHeader can show model alone", () => {
+      const lines = buildPromptHeader(undefined, 40, 2, "grok");
+      expect(lines).toHaveLength(1);
+      expect(stripAnsi(lines[0]!)).toBe("grok");
     });
   });
 

@@ -49,18 +49,42 @@ describe("Cursor hook payloads", () => {
       conversation_id: sessionId,
       generation_id: "gen-1",
       prompt: "run the tests",
+      model: "claude-opus-4-6",
       workspace_roots: ["/Users/dev/my-app"],
       title: "Fix login",
     });
 
     const events = loadEvents(sessionId);
-    expect(events.some((e) => e.type === "prompt" && e.prompt === "run the tests")).toBe(
-      true,
-    );
+    expect(
+      events.some(
+        (e) =>
+          e.type === "prompt" &&
+          e.prompt === "run the tests" &&
+          e.model === "claude-opus-4-6",
+      ),
+    ).toBe(true);
 
     const session = getSession(sessionId);
     expect(session?.terminalId).toBe("term-1");
     expect(session?.viewerClaimed).toBe(true);
+  });
+
+  test("beforeSubmitPrompt falls back to model_id when model is absent", async () => {
+    await handleHook({
+      hook_event_name: "beforeSubmitPrompt",
+      conversation_id: sessionId,
+      generation_id: "gen-model-id",
+      prompt: "hi",
+      model_id: "composer-2",
+      workspace_roots: ["/Users/dev/my-app"],
+    });
+
+    const prompt = loadEvents(sessionId).find((e) => e.type === "prompt");
+    expect(prompt).toMatchObject({
+      type: "prompt",
+      prompt: "hi",
+      model: "composer-2",
+    });
   });
 
   test("preToolUse records cmd_start with tool_use_id", async () => {

@@ -174,6 +174,17 @@ function hintFromPayload(payload: HookPayload): string | undefined {
   return typeof hint === "string" && hint.trim() ? hint.trim() : undefined;
 }
 
+/** Prefer legacy `model` slug; fall back to structured `model_id`. */
+function modelFromPayload(payload: HookPayload): string | undefined {
+  if (typeof payload.model === "string" && payload.model.trim()) {
+    return payload.model.trim();
+  }
+  if (typeof payload.model_id === "string" && payload.model_id.trim()) {
+    return payload.model_id.trim();
+  }
+  return undefined;
+}
+
 /**
  * Prefer Cursor workspace_roots; fall back to detecting a project from cwd.
  * sessionStart on a brand-new chat often omits workspace_roots.
@@ -303,6 +314,7 @@ export async function handleHook(payload: HookPayload): Promise<void> {
           : undefined;
       const promptText =
         typeof payload.prompt === "string" ? payload.prompt.trim() : "";
+      const model = modelFromPayload(payload);
       refreshTitle(id, workspace, hint);
       if (generationId && promptText) {
         appendEvent(id, {
@@ -310,6 +322,7 @@ export async function handleHook(payload: HookPayload): Promise<void> {
           at: now,
           generationId,
           prompt: promptText,
+          ...(model ? { model } : {}),
         });
       }
       // First real attach point: user submitted a prompt (title usually known).

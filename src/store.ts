@@ -48,6 +48,8 @@ export type SessionEvent =
       at: string;
       generationId: string;
       prompt: string;
+      /** Cursor model slug / id from the hook common payload */
+      model?: string;
     }
   | {
       type: "cmd_start";
@@ -409,12 +411,19 @@ export function eventsToCommands(events: SessionEvent[]): CommandRow[] {
   return order.map((id) => map.get(id)!).filter(Boolean);
 }
 
-/** Last prompt text per generationId (later events overwrite). */
-export function eventsToPrompts(events: SessionEvent[]): Map<string, string> {
-  const map = new Map<string, string>();
+export type PromptInfo = {
+  prompt: string;
+  model?: string;
+};
+
+/** Last prompt (+ model) per generationId (later events overwrite). */
+export function eventsToPrompts(events: SessionEvent[]): Map<string, PromptInfo> {
+  const map = new Map<string, PromptInfo>();
   for (const ev of events) {
     if (ev.type === "prompt" && ev.generationId && ev.prompt.trim()) {
-      map.set(ev.generationId, ev.prompt.trim());
+      const info: PromptInfo = { prompt: ev.prompt.trim() };
+      if (ev.model?.trim()) info.model = ev.model.trim();
+      map.set(ev.generationId, info);
     }
   }
   return map;

@@ -118,7 +118,23 @@ describe("session store and transcripts", () => {
         prompt: "run tests again",
       },
     ]);
-    expect(prompts.get("g1")).toBe("run tests again");
+    expect(prompts.get("g1")).toEqual({ prompt: "run tests again" });
+  });
+
+  test("maps model onto prompt generations when present", () => {
+    const prompts = eventsToPrompts([
+      {
+        type: "prompt",
+        at: "t1",
+        generationId: "g1",
+        prompt: "hello",
+        model: "  claude-opus-4-6  ",
+      },
+    ]);
+    expect(prompts.get("g1")).toEqual({
+      prompt: "hello",
+      model: "claude-opus-4-6",
+    });
   });
 
   test("loadEvents skips corrupt jsonl lines", () => {

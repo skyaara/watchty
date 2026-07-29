@@ -3,7 +3,7 @@
  * Kept separate from the interactive loop so they can be unit-tested.
  */
 import { cleanCommand } from "./command-display";
-import type { CommandRow } from "./store";
+import type { CommandRow, PromptInfo } from "./store";
 
 export const RESET = "\x1b[0m";
 export const BOLD = "\x1b[1m";
@@ -113,12 +113,12 @@ export type SidebarItem =
 
 export function buildSidebarItems(
   cmds: CommandRow[],
-  promptsByGen: Map<string, string>,
+  promptsByGen: Map<string, PromptInfo>,
 ): SidebarItem[] {
   const items: SidebarItem[] = [];
   for (let i = 0; i < cmds.length; i++) {
     const gen = cmds[i]?.generationId;
-    const hasPrompt = Boolean(gen && promptsByGen.get(gen));
+    const hasPrompt = Boolean(gen && promptsByGen.get(gen)?.prompt);
     if (i === 0) {
       if (hasPrompt) items.push({ kind: "prompt" });
     } else if (isNewPrompt(cmds[i - 1]!, cmds[i]!)) {
@@ -193,26 +193,33 @@ export function buildPromptHeader(
   text: string | undefined,
   width: number,
   maxRows = PROMPT_HEADER_MAX_ROWS,
+  model?: string,
 ): string[] {
-  if (!text?.trim() || width < 8 || maxRows < 1) return [];
-  const flat = text.replace(/\s+/g, " ").trim();
-  const prefix = "› ";
-  const wrapW = Math.max(4, width - prefix.length);
-  const chunks: string[] = [];
-  let remaining = flat;
-  while (remaining.length > 0 && chunks.length < maxRows) {
-    const last = chunks.length === maxRows - 1;
-    if (last && remaining.length > wrapW) {
-      chunks.push(truncatePlain(remaining, wrapW));
-      break;
+  if ((!text?.trim() && !model?.trim()) || width < 8 || maxRows < 1) return [];
+  const lines: string[] = [];
+  if (text?.trim()) {
+    const flat = text.replace(/\s+/g, " ").trim();
+    const prefix = "› ";
+    const wrapW = Math.max(4, width - prefix.length);
+    let remaining = flat;
+    while (remaining.length > 0 && lines.length < maxRows) {
+      const last = lines.length === maxRows - 1;
+      if (last && remaining.length > wrapW) {
+        lines.push(truncatePlain(remaining, wrapW));
+        break;
+      }
+      lines.push(remaining.slice(0, wrapW));
+      remaining = remaining.slice(wrapW);
     }
-    chunks.push(remaining.slice(0, wrapW));
-    remaining = remaining.slice(wrapW);
   }
-  return chunks.map((c, i) => {
-    const p = i === 0 ? prefix : "  ";
+  const styled = lines.map((c, i) => {
+    const p = i === 0 ? "› " : "  ";
     return `${ITALIC}${p}${c}${RESET}`;
   });
+  if (model?.trim()) {
+    styled.push(`${DIM}${truncatePlain(model.trim(), width)}${RESET}`);
+  }
+  return styled;
 }
 
 export function buildPanelLines(
