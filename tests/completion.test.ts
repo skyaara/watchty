@@ -7,7 +7,8 @@ describe("shell completion suggestions", () => {
   beforeEach(() => resetWatchtyData());
   afterEach(() => {
     resetWatchtyData();
-    process.exitCode = undefined;
+    // Bun keeps a prior exitCode=1 if cleared with undefined; reset to 0.
+    process.exitCode = 0;
   });
 
   test("lists unique short names and prefers live sessions", () => {

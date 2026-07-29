@@ -3,23 +3,11 @@ import { homedir } from "node:os";
 import { basename, join, normalize, resolve } from "node:path";
 
 const HOME = homedir();
-const NEW_ROOT = join(HOME, ".cursor", "watchty");
-/** Pre-rename data dir — used if watchty/ does not exist yet. */
-const LEGACY_ROOT = join(HOME, ".cursor", "agent-ghostty");
 
-/**
- * Prefer ~/.cursor/watchty when it has session state.
- * Otherwise keep using legacy agent-ghostty so creating
- * ~/.cursor/watchty/completions (or an empty watchty dir) doesn’t hide sessions.
- */
 function resolveRoot(): string {
-  const fromEnv = process.env.WATCHTY_ROOT;
-  if (fromEnv) return fromEnv;
-  if (existsSync(join(NEW_ROOT, "state.json"))) return NEW_ROOT;
-  if (existsSync(join(LEGACY_ROOT, "state.json"))) return LEGACY_ROOT;
-  if (existsSync(join(NEW_ROOT, "sessions"))) return NEW_ROOT;
-  if (existsSync(LEGACY_ROOT)) return LEGACY_ROOT;
-  return NEW_ROOT;
+  const fromEnv = process.env.WATCHTY_ROOT?.trim();
+  if (fromEnv) return resolve(fromEnv);
+  return join(HOME, ".cursor", "watchty");
 }
 
 export const ROOT = resolveRoot();

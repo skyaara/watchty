@@ -10,8 +10,6 @@ import {
   listSessions,
   loadEvents,
   releaseViewer,
-  setPendingCmd,
-  takePendingCmd,
   upsertSession,
 } from "../src/store";
 
@@ -143,13 +141,5 @@ describe("session store and transcripts", () => {
     expect(claimViewer(sessionId)).toBe(false);
     releaseViewer(sessionId);
     expect(claimViewer(sessionId)).toBe(true);
-  });
-
-  test("pending command queue is FIFO for overlapping shells", () => {
-    setPendingCmd(sessionId, "cmd-a");
-    setPendingCmd(sessionId, "cmd-b");
-    expect(takePendingCmd(sessionId)).toBe("cmd-a");
-    expect(takePendingCmd(sessionId)).toBe("cmd-b");
-    expect(takePendingCmd(sessionId)).toBeUndefined();
   });
 });

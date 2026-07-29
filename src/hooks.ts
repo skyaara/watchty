@@ -24,13 +24,15 @@ type HooksFile = {
 function buildHooksJson(): HooksFile {
   const command = hooksCommand();
   const entry = [{ command }];
+  const shellEntry = [{ command, matcher: "Shell" }];
   return {
     version: 1,
     hooks: {
       sessionStart: entry,
       beforeSubmitPrompt: entry,
-      beforeShellExecution: entry,
-      afterShellExecution: entry,
+      preToolUse: shellEntry,
+      postToolUse: shellEntry,
+      postToolUseFailure: shellEntry,
       sessionEnd: entry,
     },
   };
@@ -45,9 +47,7 @@ function isWatchtyHookEntry(entry: unknown): boolean {
   ) {
     return false;
   }
-  const cmd = (entry as HookEntry).command;
-  // Current name + pre-rename binary still lingering in some hooks.json files.
-  return cmd.includes("watchty") || cmd.includes("cursor-agent-ghostty");
+  return (entry as HookEntry).command.includes("watchty");
 }
 
 /** Insert/update watchty hook entries without dropping unrelated hooks. */
@@ -100,7 +100,8 @@ export async function cmdInstallHooks(force = false): Promise<void> {
     return;
   }
 
-  if (!raw.includes("watchty") && !force) {
+  const hasWatchty = raw.includes("watchty");
+  if (!hasWatchty && !force) {
     console.error(
       `${hooksPath} already exists and is not ours.\n` +
         `Merge manually, or re-run: watchty install-hooks --force\n` +
@@ -110,8 +111,13 @@ export async function cmdInstallHooks(force = false): Promise<void> {
     return;
   }
 
-  const merged = mergeWatchtyHooks(existing, ours);
-  writeFileSync(hooksPath, JSON.stringify(merged, null, 2) + "\n", "utf8");
-  console.log(`Updated watchty hooks in ${hooksPath} (other hooks preserved)`);
+  // Own install: replace with current schema. Foreign + --force: merge in.
+  const next = hasWatchty ? ours : mergeWatchtyHooks(existing, ours);
+  writeFileSync(hooksPath, JSON.stringify(next, null, 2) + "\n", "utf8");
+  console.log(
+    hasWatchty
+      ? `Updated ${hooksPath}`
+      : `Merged watchty hooks into ${hooksPath} (other hooks preserved)`,
+  );
   console.log(`command: ${hooksCommand()}`);
 }

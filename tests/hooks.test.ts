@@ -12,13 +12,13 @@ describe("hooks.json merge", () => {
     expect(merged.hooks).toEqual(expected.hooks);
   });
 
-  test("replaces legacy cursor-agent-ghostty entries with watchty", () => {
+  test("replaces prior watchty entries for the same event", () => {
     const merged = mergeWatchtyHooks(
       {
         version: 1,
         hooks: {
           sessionStart: [
-            { command: "bun /old/cursor-agent-ghostty hook" },
+            { command: "bun /old/watchty hook" },
             { command: "echo keep-me" },
           ],
         },

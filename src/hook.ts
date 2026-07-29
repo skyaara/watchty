@@ -12,8 +12,6 @@ import {
   claimViewer,
   getSession,
   releaseViewer,
-  setPendingCmd,
-  takePendingCmd,
   upsertSession,
 } from "./store";
 
@@ -23,22 +21,109 @@ export type HookPayload = {
   generation_id?: string;
   workspace_roots?: string[];
   cwd?: string;
-  command?: string;
-  output?: string;
   /** User message text from beforeSubmitPrompt */
   prompt?: string;
+  /** preToolUse / postToolUse — Cursor Shell (or Claude Bash) tool name */
+  tool_name?: string;
+  /** Stable id shared by pre/post for the same tool call */
+  tool_use_id?: string;
+  /** Shell: { command, working_directory? } */
+  tool_input?: unknown;
+  /** postToolUse: JSON string (or object) with exitCode / stdout / stderr */
+  tool_output?: unknown;
+  error_message?: string;
+  failure_type?: string;
   // Optional name fields if Cursor ever sends them
   session_name?: string;
   title?: string;
   name?: string;
   conversation_title?: string;
-  exit_code?: number | null;
-  exitCode?: number | null;
   duration?: number;
   duration_ms?: number;
   durationMs?: number;
   [key: string]: unknown;
 };
+
+/** Cursor Shell + Claude Bash (third-party hook compat). */
+function isShellTool(payload: HookPayload): boolean {
+  const name = payload.tool_name;
+  if (typeof name !== "string" || !name.trim()) return true;
+  const n = name.trim();
+  return n === "Shell" || n === "Bash";
+}
+
+function toolUseId(payload: HookPayload): string {
+  if (typeof payload.tool_use_id === "string" && payload.tool_use_id.trim()) {
+    return payload.tool_use_id.trim();
+  }
+  return randomUUID().slice(0, 8);
+}
+
+function shellCommand(payload: HookPayload): string {
+  const input = payload.tool_input;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const cmd = (input as Record<string, unknown>).command;
+    if (typeof cmd === "string" && cmd) return cmd;
+  }
+  return "(unknown)";
+}
+
+function shellCwd(
+  payload: HookPayload,
+  workspace?: string,
+): string | undefined {
+  if (typeof payload.cwd === "string" && payload.cwd.trim()) {
+    return payload.cwd.trim();
+  }
+  const input = payload.tool_input;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const rec = input as Record<string, unknown>;
+    const wd = rec.working_directory ?? rec.workingDirectory;
+    if (typeof wd === "string" && wd.trim()) return wd.trim();
+  }
+  return workspace;
+}
+
+function durationMsOf(payload: HookPayload): number | undefined {
+  const d = payload.duration_ms ?? payload.durationMs ?? payload.duration;
+  return typeof d === "number" ? d : undefined;
+}
+
+/** Normalize postToolUse tool_output into exit code + display text. */
+function shellResult(payload: HookPayload): {
+  exitCode: number | null;
+  output?: string;
+} {
+  let raw: unknown = payload.tool_output;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return { exitCode: null, output: raw };
+    }
+  }
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    const exitCode =
+      typeof o.exitCode === "number"
+        ? o.exitCode
+        : typeof o.exit_code === "number"
+          ? o.exit_code
+          : null;
+    const stdout = typeof o.stdout === "string" ? o.stdout : "";
+    const stderr = typeof o.stderr === "string" ? o.stderr : "";
+    let output: string | undefined;
+    if ("stdout" in o || "stderr" in o) {
+      output = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
+    } else if (typeof o.output === "string") {
+      output = o.output;
+    }
+    return { exitCode, output };
+  }
+
+  return { exitCode: null, output: undefined };
+}
 
 function bunAbsolute(): string {
   const fromHome = join(process.env.HOME ?? "", ".bun", "bin", "bun");
@@ -115,7 +200,7 @@ function refreshTitle(sessionId: string, workspace?: string, hint?: string): str
 
 /**
  * Open at most one Ghostty tab per conversation_id (lock file prevents races
- * between beforeSubmitPrompt and beforeShellExecution).
+ * between beforeSubmitPrompt and preToolUse).
  * If the previous tab was closed (dead terminalId), clear the claim and reopen.
  * In-flight claims (viewerClaimed / lock, no terminal yet) are left alone.
  *
@@ -142,7 +227,7 @@ function ensureTab(sessionId: string, workspace?: string, hint?: string): void {
 
   // Only release when we know the previous tab is dead. Never release merely
   // because viewerClaimed is set — that races with an in-flight open and can
-  // spawn a second Ghostty tab (beforeSubmitPrompt vs beforeShellExecution).
+  // spawn a second Ghostty tab (beforeSubmitPrompt vs preToolUse).
   if (existing?.terminalId) {
     releaseViewer(sessionId);
   }
@@ -233,22 +318,21 @@ export async function handleHook(payload: HookPayload): Promise<void> {
       process.stdout.write(JSON.stringify({ continue: true }) + "\n");
       break;
     }
-    case "beforeShellExecution": {
-      const cmdId = randomUUID().slice(0, 8);
-      const command = payload.command ?? "(unknown)";
+    case "preToolUse": {
+      if (!isShellTool(payload)) break;
+      const cmdId = toolUseId(payload);
       refreshTitle(id, workspace, hint);
       appendEvent(id, {
         type: "cmd_start",
         id: cmdId,
         at: now,
-        command,
-        cwd: payload.cwd || workspace,
+        command: shellCommand(payload),
+        cwd: shellCwd(payload, workspace),
         generationId:
           typeof payload.generation_id === "string" && payload.generation_id
             ? payload.generation_id
             : undefined,
       });
-      setPendingCmd(id, cmdId);
       // Fallback if beforeSubmitPrompt isn't hooked (older installs); no-ops
       // when the prompt hook already opened a live tab.
       ensureTab(id, workspace, hint);
@@ -257,22 +341,39 @@ export async function handleHook(payload: HookPayload): Promise<void> {
         if (s) focusSessionTab(s);
       }
       process.stdout.write(
-        JSON.stringify({ permission: "allow", continue: true }) + "\n",
+        JSON.stringify({ permission: "allow" }) + "\n",
       );
       break;
     }
-    case "afterShellExecution": {
-      const exitCode = payload.exit_code ?? payload.exitCode ?? null;
-      const durationMs =
-        payload.duration_ms ?? payload.durationMs ?? payload.duration;
-      const cmdId = takePendingCmd(id) ?? randomUUID().slice(0, 8);
+    case "postToolUse": {
+      if (!isShellTool(payload)) break;
+      const { exitCode, output } = shellResult(payload);
       appendEvent(id, {
         type: "cmd_end",
-        id: cmdId,
+        id: toolUseId(payload),
         at: now,
         exitCode,
-        durationMs: typeof durationMs === "number" ? durationMs : undefined,
-        output: payload.output,
+        durationMs: durationMsOf(payload),
+        output,
+      });
+      refreshTitle(id, workspace, hint);
+      break;
+    }
+    case "postToolUseFailure": {
+      if (!isShellTool(payload)) break;
+      const msg =
+        typeof payload.error_message === "string"
+          ? payload.error_message
+          : payload.failure_type
+            ? String(payload.failure_type)
+            : undefined;
+      appendEvent(id, {
+        type: "cmd_end",
+        id: toolUseId(payload),
+        at: now,
+        exitCode: 1,
+        durationMs: durationMsOf(payload),
+        output: msg,
       });
       refreshTitle(id, workspace, hint);
       break;

@@ -55,7 +55,10 @@ describe("install-hooks and doctor (temp HOME)", () => {
     const raw = readFileSync(hooksPath, "utf8");
     expect(raw).toContain("watchty");
     expect(raw).toContain("sessionStart");
-    expect(raw).toContain("beforeShellExecution");
+    expect(raw).toContain("preToolUse");
+    expect(raw).toContain("\"matcher\": \"Shell\"");
+    expect(raw).not.toContain("beforeShellExecution");
+    expect(raw).toContain("postToolUseFailure");
   });
 
   test("install-hooks --force merges into existing non-watchty hooks", async () => {

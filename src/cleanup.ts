@@ -56,9 +56,6 @@ function deleteSession(id: string): void {
 
   unlinkQuiet(eventsPath);
   unlinkQuiet(join(SESSIONS_DIR, `${sid}.viewer.lock`));
-  unlinkQuiet(join(SESSIONS_DIR, `${sid}.pending`));
-  unlinkQuiet(join(SESSIONS_DIR, `${sid}.pending.lock`));
-  unlinkQuiet(join(SESSIONS_DIR, `${sid}.log`)); // legacy
 }
 
 /**
@@ -124,7 +121,7 @@ function cleanupOrphanFiles(knownIds: Set<string>): void {
     return;
   }
   for (const name of names) {
-    const m = /^(.+)\.(jsonl|viewer\.lock|pending\.lock|pending|log)$/.exec(name);
+    const m = /^(.+)\.(jsonl|viewer\.lock)$/.exec(name);
     if (!m) continue;
     const sid = m[1]!;
     const stillKnown = [...knownIds].some((id) => sanitizeId(id) === sid);

@@ -6,7 +6,7 @@
         { "command": "echo custom-start" },
         { "command": "/old/watchty hook" }
       ],
-      "beforeShellExecution": [{ "command": "lint-staged" }]
+      "stop": [{ "command": "lint-staged" }]
     }
   },
   "ours": {
@@ -22,7 +22,7 @@
         { "command": "echo custom-start" },
         { "command": "/new/watchty hook" }
       ],
-      "beforeShellExecution": [{ "command": "lint-staged" }],
+      "stop": [{ "command": "lint-staged" }],
       "sessionEnd": [{ "command": "/new/watchty hook" }]
     }
   }

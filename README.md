@@ -43,15 +43,9 @@ watchty install-hooks
 watchty doctor
 ```
 
-If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `watchty install-hooks --force` to merge watchty into an existing `hooks.json` (other hooks are preserved).
+If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `watchty install-hooks --force` to merge watchty into an existing `hooks.json` (other hooks are preserved). Re-running `install-hooks` on an existing watchty install replaces the watchty hook set with the current schema (session + prompt + Shell `preToolUse` / `postToolUse` / `postToolUseFailure` + session end).
 
 On first Ghostty open from a hook, macOS may ask to allow **Automation** (Cursor → Ghostty). Approve it.
-
-Migrating from an older local install that used `~/.cursor/agent-ghostty`:
-
-```bash
-mv ~/.cursor/agent-ghostty ~/.cursor/watchty   # optional; watchty also reads the legacy path
-```
 
 ## Usage
 
@@ -100,7 +94,7 @@ Session state and transcripts under `~/.cursor/watchty/` are pruned by age.
 | **Manual** | `watchty cleanup` |
 | **Disable auto** | `config set ttl 0` (manual `--ttl` still works) |
 
-Deletes: state entry, `.jsonl`, viewer lock, pending cmd file, legacy `.log`.
+Deletes: state entry, `.jsonl`, and viewer lock.
 
 ```bash
 watchty config set ttl 7d
@@ -157,8 +151,8 @@ Suggestions follow the same workspace filter as `list`. Complete `-w` values wit
 
 ## How it works
 
-1. Cursor fires session/shell hooks.
-2. Hooks append events to `~/.cursor/watchty/sessions/<id>.jsonl`.
+1. Cursor fires session / prompt / Shell tool hooks (`preToolUse` / `postToolUse` / `postToolUseFailure`, matcher `Shell`).
+2. Hooks append events to `~/.cursor/watchty/sessions/<id>.jsonl`, pairing start/end by Cursor’s `tool_use_id` (safe with overlapping shells).
 3. **One** Ghostty tab opens per chat on the first prompt (unless `autoOpen` is false).
 4. That tab (or `watchty view` in any terminal) runs a small TUI and polls the jsonl.
 5. TTL cleanup removes old sessions (auto from hooks, or via `cleanup`).

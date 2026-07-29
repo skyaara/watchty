@@ -93,8 +93,6 @@ export type CommandRow = {
 const VIEWER_CLAIM_STALE_MS = 15_000;
 const STATE_LOCK_STALE_MS = 10_000;
 const STATE_LOCK_WAIT_MS = 15_000;
-const PENDING_LOCK_STALE_MS = 5_000;
-const PENDING_LOCK_WAIT_MS = 8_000;
 
 function emptyState(): StateFile {
   return { version: 1, sessions: {} };
@@ -106,14 +104,6 @@ export function sessionEventsPath(id: string): string {
 
 function claimPath(id: string): string {
   return join(SESSIONS_DIR, `${sanitizeId(id)}.viewer.lock`);
-}
-
-function pendingPath(id: string): string {
-  return join(SESSIONS_DIR, `${sanitizeId(id)}.pending`);
-}
-
-function pendingLockPath(id: string): string {
-  return join(SESSIONS_DIR, `${sanitizeId(id)}.pending.lock`);
 }
 
 function stateLockPath(): string {
@@ -357,54 +347,6 @@ export function releaseViewer(id: string): void {
     existing.shellTerminalId = undefined;
     existing.updatedAt = new Date().toISOString();
     state.sessions[id] = existing;
-  });
-}
-
-function withPendingLock<T>(sessionId: string, fn: () => T): T {
-  ensureDirs();
-  const lock = pendingLockPath(sessionId);
-  const fd = acquireFileLock(lock, {
-    waitMs: PENDING_LOCK_WAIT_MS,
-    staleMs: PENDING_LOCK_STALE_MS,
-  });
-  try {
-    return fn();
-  } finally {
-    releaseFileLock(lock, fd);
-  }
-}
-
-/** Push a command id onto the per-session FIFO (supports overlapping shells). */
-export function setPendingCmd(sessionId: string, cmdId: string): void {
-  withPendingLock(sessionId, () => {
-    const p = pendingPath(sessionId);
-    let prefix = "";
-    if (existsSync(p)) {
-      prefix = readFileSync(p, "utf8");
-      // Migrate legacy single-id files that lacked a trailing newline.
-      if (prefix && !prefix.endsWith("\n")) prefix += "\n";
-    }
-    writeFileSync(p, `${prefix}${cmdId}\n`, "utf8");
-  });
-}
-
-/** Pop the oldest pending command id (FIFO). */
-export function takePendingCmd(sessionId: string): string | undefined {
-  return withPendingLock(sessionId, () => {
-    const p = pendingPath(sessionId);
-    if (!existsSync(p)) return undefined;
-    try {
-      const lines = readFileSync(p, "utf8")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-      if (!lines.length) return undefined;
-      const [first, ...rest] = lines;
-      writeFileSync(p, rest.length ? `${rest.join("\n")}\n` : "", "utf8");
-      return first;
-    } catch {
-      return undefined;
-    }
   });
 }
 

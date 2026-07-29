@@ -11,14 +11,22 @@
         "command": "watchty hook"
       }
     ],
-    "beforeShellExecution": [
+    "preToolUse": [
       {
-        "command": "watchty hook"
+        "command": "watchty hook",
+        "matcher": "Shell"
       }
     ],
-    "afterShellExecution": [
+    "postToolUse": [
       {
-        "command": "watchty hook"
+        "command": "watchty hook",
+        "matcher": "Shell"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "watchty hook",
+        "matcher": "Shell"
       }
     ],
     "sessionEnd": [

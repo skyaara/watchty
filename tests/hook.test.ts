@@ -63,47 +63,116 @@ describe("Cursor hook payloads", () => {
     expect(session?.viewerClaimed).toBe(true);
   });
 
-  test("beforeShellExecution records cmd_start", async () => {
+  test("preToolUse records cmd_start with tool_use_id", async () => {
     await handleHook({
-      hook_event_name: "beforeShellExecution",
+      hook_event_name: "preToolUse",
       conversation_id: sessionId,
-      command: "bun test",
-      cwd: "/Users/dev/my-app",
+      tool_name: "Shell",
+      tool_use_id: "tc-shell-1",
+      tool_input: { command: "bun test", working_directory: "/Users/dev/my-app" },
       generation_id: "gen-2",
     });
 
     const start = loadEvents(sessionId).find((e) => e.type === "cmd_start");
     expect(start).toMatchObject({
       type: "cmd_start",
+      id: "tc-shell-1",
       command: "bun test",
+      cwd: "/Users/dev/my-app",
       generationId: "gen-2",
     });
   });
 
-  test("afterShellExecution pairs with pending cmd id", async () => {
+  test("postToolUse pairs by tool_use_id even when out of FIFO order", async () => {
     await handleHook({
-      hook_event_name: "beforeShellExecution",
+      hook_event_name: "preToolUse",
       conversation_id: sessionId,
-      command: "echo hi",
+      tool_name: "Shell",
+      tool_use_id: "cmd-slow",
+      tool_input: { command: "sleep 10" },
+    });
+    await handleHook({
+      hook_event_name: "preToolUse",
+      conversation_id: sessionId,
+      tool_name: "Shell",
+      tool_use_id: "cmd-fast",
+      tool_input: { command: "echo hi" },
     });
 
+    // Fast command finishes first — must not attach to sleep
     await handleHook({
-      hook_event_name: "afterShellExecution",
+      hook_event_name: "postToolUse",
       conversation_id: sessionId,
-      output: "hi\n",
-      exit_code: 0,
-      duration_ms: 12,
+      tool_name: "Shell",
+      tool_use_id: "cmd-fast",
+      tool_output: JSON.stringify({ exitCode: 0, stdout: "hi\n" }),
+      duration: 12,
+    });
+    await handleHook({
+      hook_event_name: "postToolUse",
+      conversation_id: sessionId,
+      tool_name: "Shell",
+      tool_use_id: "cmd-slow",
+      tool_output: JSON.stringify({ exitCode: 0, stdout: "" }),
+      duration: 10000,
     });
 
     const events = loadEvents(sessionId);
-    const end = events.find((e) => e.type === "cmd_end");
-    expect(end).toMatchObject({
+    const endFast = events.find(
+      (e) => e.type === "cmd_end" && e.id === "cmd-fast",
+    );
+    const endSlow = events.find(
+      (e) => e.type === "cmd_end" && e.id === "cmd-slow",
+    );
+    expect(endFast).toMatchObject({
       type: "cmd_end",
       exitCode: 0,
       output: "hi\n",
       durationMs: 12,
     });
-    expect(end?.id).toBe(events.find((e) => e.type === "cmd_start")?.id);
+    expect(endSlow).toMatchObject({
+      type: "cmd_end",
+      exitCode: 0,
+      output: "",
+      durationMs: 10000,
+    });
+  });
+
+  test("postToolUseFailure ends the matching tool_use_id", async () => {
+    await handleHook({
+      hook_event_name: "preToolUse",
+      conversation_id: sessionId,
+      tool_name: "Shell",
+      tool_use_id: "cmd-fail",
+      tool_input: { command: "false" },
+    });
+    await handleHook({
+      hook_event_name: "postToolUseFailure",
+      conversation_id: sessionId,
+      tool_name: "Shell",
+      tool_use_id: "cmd-fail",
+      error_message: "Command timed out after 30s",
+      failure_type: "timeout",
+      duration: 5000,
+    });
+
+    expect(loadEvents(sessionId).find((e) => e.type === "cmd_end")).toMatchObject({
+      id: "cmd-fail",
+      exitCode: 1,
+      output: "Command timed out after 30s",
+      durationMs: 5000,
+    });
+  });
+
+  test("preToolUse ignores non-Shell tools", async () => {
+    await handleHook({
+      hook_event_name: "preToolUse",
+      conversation_id: sessionId,
+      tool_name: "Read",
+      tool_use_id: "tc-read",
+      tool_input: { path: "README.md" },
+    });
+    expect(loadEvents(sessionId)).toHaveLength(0);
   });
 
   test("autoOpen=false still writes events without opening Ghostty", async () => {
@@ -180,12 +249,13 @@ describe("Cursor hook payloads", () => {
     expect(loadEvents(stopId).some((e) => e.type === "session_end")).toBe(true);
   });
 
-  test("beforeShellExecution opens a tab when prompt hook never ran", async () => {
+  test("preToolUse opens a tab when prompt hook never ran", async () => {
     await handleHook({
-      hook_event_name: "beforeShellExecution",
+      hook_event_name: "preToolUse",
       conversation_id: sessionId,
-      command: "bun test",
-      cwd: "/Users/dev/my-app",
+      tool_name: "Shell",
+      tool_use_id: "tc-open",
+      tool_input: { command: "bun test", working_directory: "/Users/dev/my-app" },
       generation_id: "gen-shell",
     });
 
@@ -220,7 +290,7 @@ describe("Cursor hook payloads", () => {
     expect(getSession(sessionId)?.terminalId).toBe("term-2");
   });
 
-  test("writes continue permission JSON on prompt and shell hooks", async () => {
+  test("writes continue / permission JSON on prompt and shell tool hooks", async () => {
     const promptOut = await captureStdout(() =>
       handleHook({
         hook_event_name: "beforeSubmitPrompt",
@@ -233,14 +303,15 @@ describe("Cursor hook payloads", () => {
 
     const shellOut = await captureStdout(() =>
       handleHook({
-        hook_event_name: "beforeShellExecution",
+        hook_event_name: "preToolUse",
         conversation_id: sessionId,
-        command: "true",
+        tool_name: "Shell",
+        tool_use_id: "tc-perm",
+        tool_input: { command: "true" },
       }),
     );
     expect(JSON.parse(shellOut.trim())).toEqual({
       permission: "allow",
-      continue: true,
     });
   });
 });
