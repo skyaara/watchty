@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { printComplete } from "../src/completion";
-import { upsertSession } from "../src/store";
+import { mutateState, upsertSession } from "../src/store";
 import { captureConsole, resetWatchtyData } from "./helpers";
 
 describe("shell completion suggestions", () => {
@@ -11,24 +11,27 @@ describe("shell completion suggestions", () => {
     process.exitCode = 0;
   });
 
-  test("lists unique short names and prefers live sessions", () => {
-    upsertSession("live-aaaaaaaa", {
+  test("lists unique short names and prefers recently updated sessions", () => {
+    upsertSession("older-aaaaaaaa", {
       title: "my-app | Fix login",
       workspace: "/Users/dev/my-app",
-      updatedAt: "2024-06-02T00:00:00.000Z",
     });
-    upsertSession("dead-bbbbbbbb", {
+    upsertSession("newer-bbbbbbbb", {
       title: "my-app | Old work",
       workspace: "/Users/dev/my-app",
-      endedAt: "2024-06-01T00:00:00.000Z",
-      updatedAt: "2024-06-01T00:00:00.000Z",
+    });
+    // upsertSession always stamps updatedAt=now; pin ages for sort order.
+    mutateState((state) => {
+      state.sessions["older-aaaaaaaa"]!.updatedAt = "2024-06-01T00:00:00.000Z";
+      state.sessions["newer-bbbbbbbb"]!.updatedAt = "2024-06-02T00:00:00.000Z";
+      state.sessions["newer-bbbbbbbb"]!.endedAt = "2024-06-02T00:00:00.000Z";
     });
 
     const { log } = captureConsole(() =>
       printComplete(["sessions", "--all"]),
     );
-    expect(log[0]).toBe("Fix login");
-    expect(log).toContain("Old work");
+    expect(log[0]).toBe("Old work");
+    expect(log).toContain("Fix login");
   });
 
   test("falls back to short id when short names and titles collide", () => {
@@ -81,9 +84,9 @@ describe("shell completion suggestions", () => {
     expect(commands).toContain("complete");
 
     const keys = captureConsole(() =>
-      printComplete(["config-keys", "tt"]),
+      printComplete(["config-keys", "hook"]),
     ).log;
-    expect(keys).toEqual(["ttl"]);
+    expect(keys).toEqual(["hooksScope"]);
   });
 
   test("rejects unknown completion targets", () => {

@@ -5,6 +5,9 @@ import { parseTtl } from "./ttl";
 
 export const CONFIG_PATH = join(ROOT, "config.json");
 
+/** Where `install-hooks` writes by default (flag overrides). */
+export type HooksScope = "global" | "workspace";
+
 export type WatchtyConfig = {
   /** Open Ghostty tabs from hooks (default true). */
   autoOpen?: boolean;
@@ -17,6 +20,11 @@ export type WatchtyConfig = {
    * Set to 0 to disable automatic cleanup (manual `cleanup --ttl …` still works).
    */
   ttlHours?: number;
+  /**
+   * Default target for `watchty install-hooks` (default `global`).
+   * `global` → ~/.cursor/hooks.json; `workspace` → <project>/.cursor/hooks.json
+   */
+  hooksScope?: HooksScope;
 };
 
 const DEFAULTS: Required<WatchtyConfig> = {
@@ -24,7 +32,15 @@ const DEFAULTS: Required<WatchtyConfig> = {
   background: true,
   focus: false,
   ttlHours: 168,
+  hooksScope: "global",
 };
+
+export function parseHooksScope(value: string): HooksScope | undefined {
+  const v = value.trim().toLowerCase();
+  if (v === "global" || v === "user" || v === "home") return "global";
+  if (v === "workspace" || v === "local" || v === "project") return "workspace";
+  return undefined;
+}
 
 export function loadConfig(): Required<WatchtyConfig> {
   if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };
@@ -38,6 +54,7 @@ export function loadConfig(): Required<WatchtyConfig> {
         typeof raw.ttlHours === "number" && Number.isFinite(raw.ttlHours)
           ? Math.max(0, raw.ttlHours)
           : DEFAULTS.ttlHours,
+      hooksScope: parseHooksScope(String(raw.hooksScope ?? "")) ?? DEFAULTS.hooksScope,
     };
   } catch {
     return { ...DEFAULTS };
@@ -67,6 +84,12 @@ function envTtlHours(): number | undefined {
   return ms / 3_600_000;
 }
 
+function envHooksScope(): HooksScope | undefined {
+  const raw = process.env.WATCHTY_HOOKS_SCOPE;
+  if (raw === undefined) return undefined;
+  return parseHooksScope(raw);
+}
+
 /** Env overrides config file (so one-off exports still work). */
 export function resolvedSettings(): Required<WatchtyConfig> {
   const cfg = loadConfig();
@@ -75,5 +98,6 @@ export function resolvedSettings(): Required<WatchtyConfig> {
     background: envBool("WATCHTY_BACKGROUND") ?? cfg.background,
     focus: envBool("WATCHTY_FOCUS") ?? cfg.focus,
     ttlHours: envTtlHours() ?? cfg.ttlHours,
+    hooksScope: envHooksScope() ?? cfg.hooksScope,
   };
 }

@@ -1,15 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { CONFIG_PATH, loadConfig } from "./config";
+import { CONFIG_PATH, loadConfig, resolvedSettings } from "./config";
 import { formatTtl } from "./cleanup";
 import { ghosttyAvailable } from "./ghostty";
 import { packageRoot, selfBin } from "./hook";
+import {
+  effectiveHooksScope,
+  resolveHooksPath,
+} from "./hooks";
 import { ROOT, STATE_PATH, SESSIONS_DIR } from "./paths";
-
-function cursorDir(): string {
-  return process.env.WATCHTY_CURSOR_DIR?.trim() || join(homedir(), ".cursor");
-}
 
 export async function cmdDoctor(): Promise<void> {
   const checks: { name: string; ok: boolean; detail: string }[] = [];
@@ -40,16 +38,23 @@ export async function cmdDoctor(): Promise<void> {
   const g = ghosttyAvailable();
   checks.push({ name: "Ghostty AppleScript", ok: g.ok, detail: g.detail });
 
-  const hooksPath = join(cursorDir(), "hooks.json");
+  const scope = effectiveHooksScope();
+  const hooksPath = resolveHooksPath(scope);
   let hooksOk = false;
-  let hooksDetail = `${hooksPath} missing — run: watchty install-hooks`;
-  if (existsSync(hooksPath)) {
+  let hooksDetail: string;
+  if (!hooksPath) {
+    hooksDetail =
+      `hooksScope=${scope} but cwd is not a Cursor workspace — ` +
+      `cd into a project or: watchty config set hooksScope global`;
+  } else if (!existsSync(hooksPath)) {
+    hooksDetail = `${hooksPath} missing — run: watchty install-hooks`;
+  } else {
     try {
       const raw = readFileSync(hooksPath, "utf8");
       hooksOk = raw.includes("watchty");
       hooksDetail = hooksOk
-        ? `wired in ${hooksPath}`
-        : `${hooksPath} exists but does not mention watchty — run install-hooks --force or merge`;
+        ? `wired in ${hooksPath} (${scope})`
+        : `${hooksPath} exists but does not mention watchty — run: watchty install-hooks`;
     } catch (e) {
       hooksDetail = String(e);
     }
@@ -57,10 +62,14 @@ export async function cmdDoctor(): Promise<void> {
   checks.push({ name: "hooks.json", ok: hooksOk, detail: hooksDetail });
 
   const cfg = loadConfig();
+  const resolved = resolvedSettings();
   checks.push({
     name: "config",
     ok: true,
-    detail: `${CONFIG_PATH} autoOpen=${cfg.autoOpen} background=${cfg.background} focus=${cfg.focus} ttl=${formatTtl(Math.round(cfg.ttlHours * 3_600_000))}`,
+    detail:
+      `${CONFIG_PATH} autoOpen=${cfg.autoOpen} background=${cfg.background} ` +
+      `focus=${cfg.focus} ttl=${formatTtl(Math.round(cfg.ttlHours * 3_600_000))} ` +
+      `hooksScope=${resolved.hooksScope}`,
   });
 
   checks.push({

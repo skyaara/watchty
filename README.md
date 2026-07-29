@@ -40,10 +40,13 @@ From a clone (dev):
 git clone https://github.com/skyaara/watchty.git
 cd watchty && bun install && bun link
 watchty install-hooks
+# or project-only: watchty install-hooks --workspace
 watchty doctor
 ```
 
-If you already have hooks, merge entries from [`hooks.example.json`](hooks.example.json), or run `watchty install-hooks --force` to merge watchty into an existing `hooks.json` (other hooks are preserved). Re-running `install-hooks` on an existing watchty install replaces the watchty hook set with the current schema (session + prompt + Shell `preToolUse` / `postToolUse` / `postToolUseFailure` + session end).
+If you already have hooks, `watchty install-hooks` merges watchty in and preserves unrelated entries. Re-running it refreshes the watchty hook set to the current schema (session + prompt + Shell `preToolUse` / `postToolUse` / `postToolUseFailure` + session end) without dropping other hooks. Invalid `hooks.json` is left alone — fix the JSON, then re-run.
+
+By default, bare `watchty install-hooks` **asks** where to install (global vs this workspace). Pass `--global` or `--workspace` to skip the prompt. `hooksScope` / `WATCHTY_HOOKS_SCOPE` is the default selection in the prompt (and the choice used when stdin is not a TTY).
 
 On first Ghostty open from a hook, macOS may ask to allow **Automation** (Cursor → Ghostty). Approve it.
 
@@ -119,7 +122,9 @@ watchty focus <title-or-id>         # Ghostty only
 watchty cleanup [--ttl <dur>] [--dry-run]
 watchty config
 watchty config set <key> <value>
-watchty install-hooks [--force]
+watchty install-hooks
+watchty install-hooks --global
+watchty install-hooks --workspace
 watchty doctor
 watchty completion install          # tab-complete session names (zsh/bash)
 ```
@@ -169,10 +174,12 @@ Viewer keys: `↑/↓` or `j/k` select a command, `u/d` scroll, `f` follow lates
 | `background` / `WATCHTY_BACKGROUND` | Don’t call AppleScript `activate` (default `true`; see [known bug](#known-bug-background-still-steals-focus)) |
 | `focus` / `WATCHTY_FOCUS` | Switch to the new session tab (default `false`) |
 | `ttlHours` / `WATCHTY_TTL` | Auto-delete sessions older than this (default `7d`; `0` = off) |
+| `hooksScope` / `WATCHTY_HOOKS_SCOPE` | Default pick for interactive `install-hooks` (and non-TTY installs): `global` or `workspace` |
 
 ```bash
 watchty config set autoOpen false
 watchty config set ttl 3d
+watchty config set hooksScope workspace
 watchty config show
 ```
 
@@ -181,7 +188,8 @@ watchty config show
   "autoOpen": true,
   "background": true,
   "focus": false,
-  "ttlHours": 168
+  "ttlHours": 168,
+  "hooksScope": "global"
 }
 ```
 

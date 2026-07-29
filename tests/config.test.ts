@@ -12,6 +12,7 @@ describe("watchty configuration", () => {
     "WATCHTY_FOCUS",
     "WATCHTY_TTL",
     "WATCHTY_TTL_HOURS",
+    "WATCHTY_HOOKS_SCOPE",
   ] as const;
 
   beforeEach(() => resetWatchtyData());
@@ -26,6 +27,7 @@ describe("watchty configuration", () => {
       background: true,
       focus: false,
       ttlHours: 168,
+      hooksScope: "global",
     });
   });
 
@@ -40,15 +42,22 @@ describe("watchty configuration", () => {
   });
 
   test("environment variables override file config", () => {
-    saveConfig({ autoOpen: true, focus: false, ttlHours: 168 });
+    saveConfig({ autoOpen: true, focus: false, ttlHours: 168, hooksScope: "global" });
     process.env.WATCHTY_AUTO_OPEN = "false";
     process.env.WATCHTY_FOCUS = "1";
     process.env.WATCHTY_TTL = "24h";
+    process.env.WATCHTY_HOOKS_SCOPE = "workspace";
 
     expect(resolvedSettings()).toMatchObject({
       autoOpen: false,
       focus: true,
       ttlHours: 24,
+      hooksScope: "workspace",
     });
+  });
+
+  test("persists hooksScope", () => {
+    saveConfig({ hooksScope: "workspace" });
+    expect(loadConfig().hooksScope).toBe("workspace");
   });
 });

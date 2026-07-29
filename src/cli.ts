@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { CONFIG_PATH, loadConfig, saveConfig, type WatchtyConfig } from "./config";
+import { CONFIG_PATH, loadConfig, parseHooksScope, saveConfig, type WatchtyConfig } from "./config";
 import {
   cleanupSessions,
   describeCleanup,
@@ -8,7 +8,7 @@ import {
 } from "./cleanup";
 import { focusSessionTab } from "./ghostty";
 import { handleHook, readHookPayload } from "./hook";
-import { cmdInstallHooks } from "./hooks";
+import { cmdInstallHooks, parseInstallHooksArgs } from "./hooks";
 import { cmdDoctor } from "./doctor";
 import { workspaceWindowTitle } from "./paths";
 import { getSession, listSessions, type SessionRecord } from "./store";
@@ -26,7 +26,7 @@ Usage:
   watchty cleanup [--ttl <dur>] [--dry-run]
   watchty config            Show ~/.cursor/watchty/config.json
   watchty config set <k> <v>
-  watchty install-hooks     Write ~/.cursor/hooks.json with absolute binary path
+  watchty install-hooks [--global|--workspace]  Write hooks.json (prompt if no flag)
   watchty doctor            Check install / Ghostty / hooks
   watchty completion install   Enable tab-complete for session names
   watchty help
@@ -49,6 +49,7 @@ Config keys (also via env; env wins):
   background   true|false   Open without stealing app focus (default true)
   focus        true|false   Switch to the new session tab (default false)
   ttl / ttlHours  7d|24h|0  Auto-delete old session logs (default 7d; 0 = off)
+  hooksScope   global|workspace  Default pick for install-hooks prompt (default global)
 
 Ghostty auto-open is the primary UX. Pull mode works in any terminal:
   watchty config set autoOpen false
@@ -158,11 +159,9 @@ function titleMatches(query: string, scope: Scope = { workspace: null }) {
   });
 }
 
-/** Most recently updated session that has not ended (or any latest if none live). */
+/** Most recently updated session in scope (endedAt is a soft label, not a filter). */
 function latestSession(scope: Scope = { workspace: undefined }) {
-  const sessions = scopedSessions(scope);
-  const live = sessions.find((s) => !s.endedAt);
-  return live ?? sessions[0];
+  return scopedSessions(scope)[0];
 }
 
 function parseBool(v: string): boolean | undefined {
@@ -268,7 +267,7 @@ async function cmdConfig(args: string[]): Promise<void> {
   if (sub === "set") {
     if (!key || value === undefined) {
       console.error(
-        "usage: watchty config set <autoOpen|background|focus|ttl> <value>",
+        "usage: watchty config set <autoOpen|background|focus|ttl|hooksScope> <value>",
       );
       process.exitCode = 1;
       return;
@@ -282,6 +281,19 @@ async function cmdConfig(args: string[]): Promise<void> {
         return;
       }
       patch.ttlHours = ms / 3_600_000;
+    } else if (
+      key === "hooksScope" ||
+      key === "hooks-scope" ||
+      key === "hooks_scope" ||
+      key === "hookScope"
+    ) {
+      const scope = parseHooksScope(value);
+      if (!scope) {
+        console.error(`expected global|workspace; got: ${value}`);
+        process.exitCode = 1;
+        return;
+      }
+      patch.hooksScope = scope;
     } else {
       const bool = parseBool(value);
       if (bool === undefined) {
@@ -296,7 +308,9 @@ async function cmdConfig(args: string[]): Promise<void> {
       } else if (key === "focus") {
         patch.focus = bool;
       } else {
-        console.error(`unknown key: ${key} (autoOpen | background | focus | ttl)`);
+        console.error(
+          `unknown key: ${key} (autoOpen | background | focus | ttl | hooksScope)`,
+        );
         process.exitCode = 1;
         return;
       }
@@ -426,9 +440,19 @@ async function main(): Promise<void> {
     case "cleanup":
       await cmdCleanup(rest);
       break;
-    case "install-hooks":
-      await cmdInstallHooks(rest.includes("--force"));
+    case "install-hooks": {
+      const parsed = parseInstallHooksArgs(rest);
+      if (parsed.error) {
+        console.error(parsed.error);
+        console.error(
+          "usage: watchty install-hooks [--global|--workspace]",
+        );
+        process.exitCode = 1;
+        break;
+      }
+      await cmdInstallHooks(parsed.scope);
       break;
+    }
     case "doctor":
       await cmdDoctor();
       break;

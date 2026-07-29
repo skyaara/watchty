@@ -19,7 +19,7 @@ function shortName(s: SessionRecord): string {
 /**
  * Labels for attaching via `watchty view` / `focus`.
  * Prefer unique chat names; fall back to full title or short id.
- * Live sessions are listed first.
+ * Most recently updated sessions are listed first (endedAt is not a filter).
  *
  * Default scope: current Cursor workspace when detectable; else all.
  * Pass workspace=`*` / `all` for everything; or an explicit path/name.
@@ -37,12 +37,8 @@ function sessionAttachSuggestions(
     filter = detectCursorWorkspace(process.cwd());
   }
 
-  const sessions = [...listSessions({ workspace: filter })].sort((a, b) => {
-    const ae = a.endedAt ? 1 : 0;
-    const be = b.endedAt ? 1 : 0;
-    if (ae !== be) return ae - be;
-    return b.updatedAt.localeCompare(a.updatedAt);
-  });
+  // listSessions already sorts by updatedAt desc; copy for stable labeling.
+  const sessions = listSessions({ workspace: filter });
 
   const nameCount = new Map<string, number>();
   for (const s of sessions) {
@@ -121,7 +117,7 @@ function commandSuggestions(prefix = ""): string[] {
 }
 
 function configKeySuggestions(prefix = ""): string[] {
-  const keys = ["autoOpen", "background", "focus", "ttl"];
+  const keys = ["autoOpen", "background", "focus", "ttl", "hooksScope"];
   const q = prefix.trim().toLowerCase();
   if (!q) return keys;
   return keys.filter((k) => k.toLowerCase().startsWith(q));
@@ -228,7 +224,7 @@ _watchty() {
     'focus:Focus the Ghostty tab for a session'
     'cleanup:Delete old session logs'
     'config:Show or set config'
-    'install-hooks:Write ~/.cursor/hooks.json'
+    'install-hooks:Write ~/.cursor or project .cursor/hooks.json'
     'doctor:Check install / Ghostty / hooks'
     'completion:Print or install shell completion'
     'help:Show help'
@@ -309,7 +305,7 @@ _watchty() {
       return 0
       ;;
     install-hooks)
-      _values 'flags' --force
+      _values 'flags' --global -g --workspace -w --local
       return 0
       ;;
   esac
@@ -409,7 +405,7 @@ _watchty() {
       return 0
       ;;
     install-hooks)
-      COMPREPLY=( $(compgen -W "--force" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "--global -g --workspace -w --local" -- "\${cur}") )
       return 0
       ;;
   esac

@@ -61,7 +61,7 @@ describe("install-hooks and doctor (temp HOME)", () => {
     expect(raw).toContain("postToolUseFailure");
   });
 
-  test("install-hooks --force merges into existing non-watchty hooks", async () => {
+  test("install-hooks merges into existing non-watchty hooks", async () => {
     mkdirSync(cursorDir, { recursive: true });
     writeFileSync(
       join(cursorDir, "hooks.json"),
@@ -70,6 +70,7 @@ describe("install-hooks and doctor (temp HOME)", () => {
           version: 1,
           hooks: {
             sessionStart: [{ command: "echo other" }],
+            stop: [{ command: "lint-staged" }],
           },
         },
         null,
@@ -77,12 +78,9 @@ describe("install-hooks and doctor (temp HOME)", () => {
       ) + "\n",
     );
 
-    const refused = await runCli(["install-hooks"], { env: env() });
-    expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain("--force");
-
-    const forced = await runCli(["install-hooks", "--force"], { env: env() });
-    expect(forced.code).toBe(0);
+    const { code, stdout } = await runCli(["install-hooks"], { env: env() });
+    expect(code).toBe(0);
+    expect(stdout).toContain("Merged");
 
     const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf8"));
     const sessionStart = hooks.hooks.sessionStart as { command: string }[];
@@ -90,20 +88,52 @@ describe("install-hooks and doctor (temp HOME)", () => {
       true,
     );
     expect(sessionStart.some((e) => e.command.includes("watchty"))).toBe(true);
+    expect(hooks.hooks.stop).toEqual([{ command: "lint-staged" }]);
   });
 
-  test("install-hooks --force replaces invalid JSON", async () => {
+  test("reinstall preserves non-watchty hooks when watchty is already present", async () => {
     mkdirSync(cursorDir, { recursive: true });
-    writeFileSync(join(cursorDir, "hooks.json"), "{not-json");
+    writeFileSync(
+      join(cursorDir, "hooks.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          hooks: {
+            sessionStart: [
+              { command: "echo custom-start" },
+              { command: "watchty hook" },
+            ],
+            stop: [{ command: "lint-staged" }],
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
 
-    const { code, stdout } = await runCli(["install-hooks", "--force"], {
+    const { code } = await runCli(["install-hooks"], { env: env() });
+    expect(code).toBe(0);
+
+    const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf8"));
+    const sessionStart = hooks.hooks.sessionStart as { command: string }[];
+    expect(sessionStart.some((e) => e.command.includes("echo custom-start"))).toBe(
+      true,
+    );
+    expect(sessionStart.some((e) => e.command.includes("watchty"))).toBe(true);
+    expect(hooks.hooks.stop).toEqual([{ command: "lint-staged" }]);
+  });
+
+  test("install-hooks errors on invalid JSON without overwriting", async () => {
+    mkdirSync(cursorDir, { recursive: true });
+    const hooksPath = join(cursorDir, "hooks.json");
+    writeFileSync(hooksPath, "{not-json");
+
+    const { code, stderr } = await runCli(["install-hooks"], {
       env: env(),
     });
-    expect(code).toBe(0);
-    expect(stdout).toContain("--force");
-    expect(
-      JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf8")).hooks,
-    ).toBeDefined();
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("not valid JSON");
+    expect(readFileSync(hooksPath, "utf8")).toBe("{not-json");
   });
 
   test("doctor reports hooks status for temp HOME", async () => {
@@ -119,5 +149,67 @@ describe("install-hooks and doctor (temp HOME)", () => {
     const wired = await runCli(["doctor"], { env: env() });
     expect(wired.stdout).toContain("[ok] hooks.json:");
     expect(wired.stdout).toContain("wired");
+  });
+
+  test("install-hooks --workspace writes project .cursor/hooks.json", async () => {
+    // Sandboxes often block creating dirs named ".cursor"; use the fixture that
+    // already has one.
+    const project = join(import.meta.dir, "fixtures", "with-cursor");
+    const hooksPath = join(project, ".cursor", "hooks.json");
+    const original = readFileSync(hooksPath, "utf8");
+
+    try {
+      const { code, stdout, stderr } = await runCli(
+        ["install-hooks", "--workspace"],
+        { env: env(), cwd: project },
+      );
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(stdout).toContain("(workspace)");
+      expect(stdout).toContain(hooksPath);
+
+      const raw = readFileSync(hooksPath, "utf8");
+      expect(raw).toContain("watchty");
+      expect(raw).toContain("sessionStart");
+      // Global dir should stay untouched.
+      expect(existsSync(join(cursorDir, "hooks.json"))).toBe(false);
+    } finally {
+      writeFileSync(hooksPath, original, "utf8");
+    }
+  });
+
+  test("install-hooks --global ignores hooksScope=workspace config", async () => {
+    const set = await runCli(["config", "set", "hooksScope", "workspace"], {
+      env: env(),
+    });
+    expect(set.code).toBe(0);
+
+    const { code, stdout } = await runCli(["install-hooks", "--global"], {
+      env: env(),
+    });
+    expect(code).toBe(0);
+    expect(stdout).toContain("(global)");
+    expect(existsSync(join(cursorDir, "hooks.json"))).toBe(true);
+  });
+
+  test("install-hooks rejects conflicting scope flags", async () => {
+    const { code, stderr } = await runCli(
+      ["install-hooks", "--global", "--workspace"],
+      { env: env() },
+    );
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("either --global or --workspace");
+  });
+
+  test("install-hooks --workspace errors outside a Cursor project", async () => {
+    const outside = join(home, "nowhere");
+    mkdirSync(outside, { recursive: true });
+
+    const { code, stderr } = await runCli(["install-hooks", "--workspace"], {
+      env: env(),
+      cwd: outside,
+    });
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("Not inside a Cursor workspace");
   });
 });

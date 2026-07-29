@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { mergeWatchtyHooks } from "../src/hooks";
+import { mergeWatchtyHooks, parseInstallHooksArgs } from "../src/hooks";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "hooks-merge.json");
 
@@ -35,5 +35,24 @@ describe("hooks.json merge", () => {
       "echo keep-me",
       "watchty hook",
     ]);
+  });
+});
+
+describe("install-hooks flags", () => {
+  test("parses --global / --workspace", () => {
+    expect(parseInstallHooksArgs(["--global"]).scope).toBe("global");
+    expect(parseInstallHooksArgs(["-w"]).scope).toBe("workspace");
+    expect(parseInstallHooksArgs(["--local"]).scope).toBe("workspace");
+    expect(parseInstallHooksArgs([]).scope).toBeUndefined();
+  });
+
+  test("rejects conflicting or unknown flags", () => {
+    expect(parseInstallHooksArgs(["--global", "--workspace"]).error).toContain(
+      "either",
+    );
+    expect(parseInstallHooksArgs(["--scope", "global"]).error).toContain(
+      "unknown",
+    );
+    expect(parseInstallHooksArgs(["--force"]).error).toContain("unknown");
   });
 });

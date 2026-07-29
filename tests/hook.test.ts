@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { resetOsascriptRunner, setOsascriptRunner } from "../src/ghostty";
 import { handleHook } from "../src/hook";
@@ -245,7 +248,7 @@ describe("Cursor hook payloads", () => {
     expect(Object.keys(loadState().sessions)).toHaveLength(0);
   });
 
-  test("sessionEnd and stop mark endedAt and write session_end", async () => {
+  test("sessionEnd marks endedAt and writes session_end", async () => {
     await handleHook({
       hook_event_name: "sessionStart",
       conversation_id: sessionId,
@@ -262,15 +265,57 @@ describe("Cursor hook payloads", () => {
     expect(loadEvents(sessionId).some((e) => e.type === "session_end")).toBe(
       true,
     );
+  });
 
+  test("later hooks without workspace_roots do not wipe stored workspace", async () => {
+    await handleHook({
+      hook_event_name: "sessionStart",
+      conversation_id: sessionId,
+      workspace_roots: ["/Users/dev/my-app"],
+      title: "Keep workspace",
+    });
+    expect(getSession(sessionId)?.workspace).toBe("/Users/dev/my-app");
+
+    // Leave the repo (has .cursor/) so workspaceFromPayload returns undefined.
+    const outside = join(tmpdir(), `watchty-no-ws-${Date.now()}`);
+    mkdirSync(outside, { recursive: true });
+    const prev = process.cwd();
+    process.chdir(outside);
+    try {
+      await handleHook({
+        hook_event_name: "beforeSubmitPrompt",
+        conversation_id: sessionId,
+        prompt: "follow up",
+        generation_id: "gen-no-ws",
+      });
+      expect(getSession(sessionId)?.workspace).toBe("/Users/dev/my-app");
+
+      await handleHook({
+        hook_event_name: "sessionEnd",
+        conversation_id: sessionId,
+      });
+      expect(getSession(sessionId)?.workspace).toBe("/Users/dev/my-app");
+    } finally {
+      process.chdir(prev);
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("stop does not end the session", async () => {
     const stopId = "conv-stop-002";
+    await handleHook({
+      hook_event_name: "sessionStart",
+      conversation_id: stopId,
+      title: "Still open",
+    });
     await handleHook({
       hook_event_name: "stop",
       conversation_id: stopId,
-      title: "Stopped",
     });
-    expect(getSession(stopId)?.endedAt).toBeDefined();
-    expect(loadEvents(stopId).some((e) => e.type === "session_end")).toBe(true);
+    expect(getSession(stopId)?.endedAt).toBeUndefined();
+    expect(loadEvents(stopId).some((e) => e.type === "session_end")).toBe(
+      false,
+    );
   });
 
   test("preToolUse opens a tab when prompt hook never ran", async () => {

@@ -205,7 +205,12 @@ function refreshTitle(sessionId: string, workspace?: string, hint?: string): str
     workspace,
     hint,
   });
-  upsertSession(sessionId, { title, workspace });
+  // Omit undefined workspace so a later hook without workspace_roots does not
+  // wipe a path stored from an earlier event.
+  upsertSession(sessionId, {
+    title,
+    ...(workspace !== undefined ? { workspace } : {}),
+  });
   return title;
 }
 
@@ -263,7 +268,7 @@ function ensureTab(sessionId: string, workspace?: string, hint?: string): void {
   if (result.ok) {
     upsertSession(sessionId, {
       title,
-      workspace,
+      ...(workspace !== undefined ? { workspace } : {}),
       tabId: result.tabId,
       terminalId: result.terminalId,
       windowId: result.windowId,
@@ -285,7 +290,7 @@ export async function handleHook(payload: HookPayload): Promise<void> {
   if (!id) return;
 
   // Throttled TTL cleanup (session boundaries only — cheap no-op most of the time)
-  if (event === "sessionStart" || event === "sessionEnd" || event === "stop") {
+  if (event === "sessionStart" || event === "sessionEnd") {
     maybeAutoCleanup();
   }
 
@@ -391,11 +396,12 @@ export async function handleHook(payload: HookPayload): Promise<void> {
       refreshTitle(id, workspace, hint);
       break;
     }
-    case "sessionEnd":
-    case "stop": {
+    case "sessionEnd": {
+      // Composer conversation closed (user_close / window_close / …) — not
+      // per-turn `stop`. Tool cmds already end via postToolUse(Failure).
       appendEvent(id, { type: "session_end", at: now });
       upsertSession(id, {
-        workspace,
+        ...(workspace !== undefined ? { workspace } : {}),
         endedAt: now,
       });
       break;
