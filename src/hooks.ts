@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { resolvedSettings, type HooksScope } from "./config";
-import { selfBin } from "./hook";
+import { selfBin, shellQuote } from "./hook";
 import { detectCursorWorkspace } from "./workspace";
 
 /** ~/.cursor, or WATCHTY_CURSOR_DIR for tests / alternate installs. */
@@ -14,7 +14,7 @@ export function globalCursorDir(): string {
 
 function hooksCommand(): string {
   const linked = Bun.which("watchty");
-  if (linked) return `${linked} hook`;
+  if (linked) return `${shellQuote(linked)} hook`;
   return `${selfBin()} hook`;
 }
 

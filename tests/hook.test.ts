@@ -4,9 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { resetOsascriptRunner, setOsascriptRunner } from "../src/ghostty";
-import { handleHook } from "../src/hook";
+import { handleHook, shellQuote } from "../src/hook";
 import { getSession, loadEvents, loadState, upsertSession } from "../src/store";
 import { captureStdout, resetWatchtyData } from "./helpers";
+
+describe("shellQuote", () => {
+  test("wraps in single quotes and escapes embedded quotes", () => {
+    expect(shellQuote("/Users/foo bar/bun")).toBe("'/Users/foo bar/bun'");
+    expect(shellQuote("it's")).toBe(`'it'\\''s'`);
+  });
+});
 
 describe("Cursor hook payloads", () => {
   const sessionId = "conv-hook-test-001";
@@ -47,6 +54,12 @@ describe("Cursor hook payloads", () => {
   });
 
   test("beforeSubmitPrompt writes prompt events and opens one viewer tab", async () => {
+    let script = "";
+    setOsascriptRunner((s) => {
+      script = s;
+      return { ok: true, stdout: "tab-1\tterm-1\twin-1", stderr: "" };
+    });
+
     await handleHook({
       hook_event_name: "beforeSubmitPrompt",
       conversation_id: sessionId,
@@ -70,6 +83,11 @@ describe("Cursor hook payloads", () => {
     const session = getSession(sessionId);
     expect(session?.terminalId).toBe("term-1");
     expect(session?.viewerClaimed).toBe(true);
+
+    // Ghostty runs multi-arg surface commands via /bin/sh -c — each argv
+    // token must be shell-quoted so paths with spaces survive.
+    expect(script).toContain(`view '${sessionId}'`);
+    expect(script).toMatch(/set command of cfg to "'[^']+' '[^']+' view '/);
   });
 
   test("beforeSubmitPrompt falls back to model_id when model is absent", async () => {

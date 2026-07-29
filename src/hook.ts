@@ -137,13 +137,21 @@ function cliAbsolute(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "cli.ts");
 }
 
+/**
+ * POSIX single-quote for `/bin/sh -c` (Ghostty wraps multi-arg `command`
+ * that way; Cursor hooks.json runs through a shell too).
+ */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Invocation safe under Ghostty's --noprofile --norc login shell. */
 function selfBin(): string {
-  return `${bunAbsolute()} ${cliAbsolute()}`;
+  return `${shellQuote(bunAbsolute())} ${shellQuote(cliAbsolute())}`;
 }
 
 function viewCommand(sessionId: string): string {
-  return `${selfBin()} view ${sessionId}`;
+  return `${selfBin()} view ${shellQuote(sessionId)}`;
 }
 
 function shouldFocus(): boolean {
