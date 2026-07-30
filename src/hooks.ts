@@ -1,16 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { installCompletion } from "./completion";
 import { resolvedSettings, type HooksScope } from "./config";
 import { selfBin, shellQuote } from "./hook";
+import { globalCursorDir } from "./paths";
 import { detectCursorWorkspace } from "./workspace";
-
-/** ~/.cursor, or WATCHTY_CURSOR_DIR for tests / alternate installs. */
-export function globalCursorDir(): string {
-  return process.env.WATCHTY_CURSOR_DIR?.trim() || join(homedir(), ".cursor");
-}
 
 function hooksCommand(): string {
   const linked = Bun.which("watchty");
@@ -210,6 +206,7 @@ export async function cmdInstallHooks(scopeOverride?: HooksScope): Promise<void>
     writeFileSync(hooksPath, JSON.stringify(ours, null, 2) + "\n", "utf8");
     console.log(`Wrote ${hooksPath} (${scope})`);
     console.log(`command: ${hooksCommand()}`);
+    installShellCompletionBestEffort();
     return;
   }
 
@@ -231,4 +228,17 @@ export async function cmdInstallHooks(scopeOverride?: HooksScope): Promise<void>
   writeFileSync(hooksPath, JSON.stringify(next, null, 2) + "\n", "utf8");
   console.log(`Merged watchty hooks into ${hooksPath} (${scope})`);
   console.log(`command: ${hooksCommand()}`);
+  installShellCompletionBestEffort();
+}
+
+/** Tab-complete setup — best-effort so a shell-rc failure doesn’t undo hooks. */
+function installShellCompletionBestEffort(): void {
+  try {
+    installCompletion();
+  } catch (e) {
+    console.error(
+      `Warning: could not install shell completion (${String(e)}).\n` +
+        `Run: watchty completion install`,
+    );
+  }
 }

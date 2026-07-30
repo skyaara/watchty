@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { detectCursorWorkspace } from "../src/workspace";
 import { resetWatchtyData } from "./helpers";
 import { upsertSession } from "../src/store";
 
 const WITH_CURSOR = join(import.meta.dir, "fixtures", "with-cursor");
+const HOMES_ROOT = join(import.meta.dir, ".tmp-homes");
+
+/** Mirror of Cursor’s projects/ folder naming (see src/workspace.ts). */
+function cursorProjectFolder(workspacePath: string): string {
+  return resolve(workspacePath).replace(/^\//, "").replace(/\//g, "-");
+}
 
 /**
  * list/view auto-scope to the current Cursor project when possible.
@@ -46,6 +52,33 @@ describe("Cursor workspace detection", () => {
       expect(detectCursorWorkspace(outside)).toBeUndefined();
     } finally {
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("detects Cursor projects/ entry without a local .cursor dir", () => {
+    resetWatchtyData();
+    mkdirSync(HOMES_ROOT, { recursive: true });
+    const home = mkdtempSync(join(HOMES_ROOT, "ws-"));
+    const cursorDir = join(home, "cursor-config");
+    const project = join(home, "Desktop", "oci-k8s-static-portfolio");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(
+      join(cursorDir, "projects", cursorProjectFolder(project)),
+      { recursive: true },
+    );
+
+    const prev = process.env.WATCHTY_CURSOR_DIR;
+    process.env.WATCHTY_CURSOR_DIR = cursorDir;
+    try {
+      const sub = join(project, "helm");
+      mkdirSync(sub, { recursive: true });
+      expect(detectCursorWorkspace(sub)).toBe(project);
+      expect(detectCursorWorkspace(project)).toBe(project);
+    } finally {
+      if (prev === undefined) delete process.env.WATCHTY_CURSOR_DIR;
+      else process.env.WATCHTY_CURSOR_DIR = prev;
+      rmSync(home, { recursive: true, force: true });
+      resetWatchtyData();
     }
   });
 });

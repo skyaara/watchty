@@ -7,9 +7,25 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ROOT } from "./paths";
 import type { SessionRecord } from "./store";
 import { listSessions } from "./store";
 import { detectCursorWorkspace } from "./workspace";
+
+/** Shell completion scripts live under the watchty data dir. */
+function completionsDir(): string {
+  return join(ROOT, "completions");
+}
+
+function zshCompletionPath(): string {
+  return join(completionsDir(), "_watchty");
+}
+
+function bashCompletionPath(): string {
+  return join(completionsDir(), "watchty.bash");
+}
+
+const RC_MARKER = "watchty completion";
 
 function shortName(s: SessionRecord): string {
   const t = s.title;
@@ -416,8 +432,11 @@ complete -o nospace -F _watchty watchty
 `;
 }
 
-/** Write completion into ~/.cursor/watchty and hook the user’s shell rc. */
-function installCompletion(shellArg?: string): void {
+/**
+ * Write completion into the watchty data dir and hook the user’s shell rc.
+ * Safe to call from install-hooks (idempotent rc marker).
+ */
+export function installCompletion(shellArg?: string): void {
   const shell = detectShell(shellArg);
   if (shellArg && shellArg !== "zsh" && shellArg !== "bash") {
     console.error("usage: watchty completion install [zsh|bash]");
@@ -425,17 +444,16 @@ function installCompletion(shellArg?: string): void {
     return;
   }
 
-  const dir = join(homedir(), ".cursor", "watchty", "completions");
+  const dir = completionsDir();
   mkdirSync(dir, { recursive: true });
-  const marker = "watchty completion";
 
   if (shell === "zsh") {
-    const file = join(dir, "_watchty");
+    const file = zshCompletionPath();
     writeFileSync(file, zshScript() + "\n", "utf8");
     // Source after compinit so compdef registers (fpath-only is too late if appended).
-    const hook = `\n# ${marker}\n[[ -f "${file}" ]] && source "${file}"\n`;
+    const hook = `\n# ${RC_MARKER}\n[[ -f "${file}" ]] && source "${file}"\n`;
     const rc = join(homedir(), ".zshrc");
-    ensureRcHook(rc, marker, hook);
+    ensureRcHook(rc, RC_MARKER, hook);
     console.log(`Wrote ${file}`);
     console.log(`Hooked ${rc}`);
     console.log(`Reload: exec zsh   (or: source ~/.zshrc)`);
@@ -443,15 +461,48 @@ function installCompletion(shellArg?: string): void {
     return;
   }
 
-  const file = join(dir, "watchty.bash");
+  const file = bashCompletionPath();
   writeFileSync(file, bashScript() + "\n", "utf8");
-  const hook = `\n# ${marker}\n[[ -f "${file}" ]] && source "${file}"\n`;
+  const hook = `\n# ${RC_MARKER}\n[[ -f "${file}" ]] && source "${file}"\n`;
   const rc = join(homedir(), ".bashrc");
-  ensureRcHook(rc, marker, hook);
+  ensureRcHook(rc, RC_MARKER, hook);
   console.log(`Wrote ${file}`);
   console.log(`Hooked ${rc}`);
   console.log(`Reload: exec bash   (or: source ~/.bashrc)`);
   console.log(`Then:   watchty view <Tab>`);
+}
+
+/** Status of shell completion install (for doctor). */
+export function completionInstallStatus(): {
+  ok: boolean;
+  detail: string;
+} {
+  const shell = detectShell();
+  const file = shell === "zsh" ? zshCompletionPath() : bashCompletionPath();
+  const rc = join(homedir(), shell === "zsh" ? ".zshrc" : ".bashrc");
+  const hasFile = existsSync(file);
+  const hasRc =
+    existsSync(rc) && readFileSync(rc, "utf8").includes(RC_MARKER);
+
+  if (hasFile && hasRc) {
+    return { ok: true, detail: `${file} (hooked in ${rc})` };
+  }
+  if (!hasFile && !hasRc) {
+    return {
+      ok: false,
+      detail: `missing — run: watchty completion install`,
+    };
+  }
+  if (!hasFile) {
+    return {
+      ok: false,
+      detail: `${file} missing (rc hooked) — run: watchty completion install`,
+    };
+  }
+  return {
+    ok: false,
+    detail: `script at ${file} but ${rc} not hooked — run: watchty completion install`,
+  };
 }
 
 function ensureRcHook(rcPath: string, marker: string, hook: string): void {

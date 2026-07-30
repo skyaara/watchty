@@ -59,6 +59,18 @@ describe("install-hooks and doctor (temp HOME)", () => {
     expect(raw).toContain("\"matcher\": \"Shell\"");
     expect(raw).not.toContain("beforeShellExecution");
     expect(raw).toContain("postToolUseFailure");
+
+    // install-hooks also installs shell tab-completion into WATCHTY_ROOT
+    const shell = (process.env.SHELL ?? "").includes("bash") ? "bash" : "zsh";
+    const completionFile =
+      shell === "bash"
+        ? join(dataRoot, "completions", "watchty.bash")
+        : join(dataRoot, "completions", "_watchty");
+    const rcFile = join(home, shell === "bash" ? ".bashrc" : ".zshrc");
+    expect(existsSync(completionFile)).toBe(true);
+    expect(existsSync(rcFile)).toBe(true);
+    expect(readFileSync(rcFile, "utf8")).toContain("watchty completion");
+    expect(stdout).toContain("completions");
   });
 
   test("install-hooks merges into existing non-watchty hooks", async () => {
@@ -142,6 +154,8 @@ describe("install-hooks and doctor (temp HOME)", () => {
     expect(missing.stdout).toContain("install-hooks");
     expect(missing.stdout).toContain("[ok] data dir:");
     expect(missing.stdout).toContain(dataRoot);
+    expect(missing.stdout).toContain("[!!] shell completion:");
+    expect(missing.stdout).toContain("completion install");
 
     const installed = await runCli(["install-hooks"], { env: env() });
     expect(installed.code).toBe(0);
@@ -149,6 +163,7 @@ describe("install-hooks and doctor (temp HOME)", () => {
     const wired = await runCli(["doctor"], { env: env() });
     expect(wired.stdout).toContain("[ok] hooks.json:");
     expect(wired.stdout).toContain("wired");
+    expect(wired.stdout).toContain("[ok] shell completion:");
   });
 
   test("install-hooks --workspace writes project .cursor/hooks.json", async () => {

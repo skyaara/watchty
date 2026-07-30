@@ -1,6 +1,6 @@
 {
   "name": "@rayyyyyofsun/watchty",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Watch Cursor Agent shell commands in Ghostty tabs (pull-mode works in any terminal)",
   "type": "module",
   "bin": {

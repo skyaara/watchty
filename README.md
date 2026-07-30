@@ -21,7 +21,7 @@ Needs [Bun](https://bun.sh). One-liner (global CLI on PATH — needed so Cursor 
 
 ```bash
 bun add -g @rayyyyyofsun/watchty
-watchty install-hooks
+watchty install-hooks   # hooks.json + shell tab-completion
 watchty doctor
 ```
 
@@ -43,6 +43,8 @@ watchty install-hooks
 # or project-only: watchty install-hooks --workspace
 watchty doctor
 ```
+
+`install-hooks` also writes shell completion under `~/.cursor/watchty/completions/` and hooks your `~/.zshrc` / `~/.bashrc` (reload the shell, then `watchty view <Tab>`). Re-run `watchty completion install` anytime if the script is missing.
 
 If you already have hooks, `watchty install-hooks` merges watchty in and preserves unrelated entries. Re-running it refreshes the watchty hook set to the current schema (session + prompt + Shell `preToolUse` / `postToolUse` / `postToolUseFailure` + session end) without dropping other hooks. Invalid `hooks.json` is left alone — fix the JSON, then re-run.
 
@@ -146,6 +148,8 @@ Subdirectories of that project count too. If you’re outside a Cursor workspace
 
 ### Tab completion
 
+Installed automatically by `watchty install-hooks`. To install or repair alone:
+
 ```bash
 watchty completion install
 exec zsh          # or: source ~/.zshrc
@@ -221,7 +225,7 @@ Workarounds until Ghostty ships a fix:
 - No tabs but logs exist → `watchty view` in any terminal.
 - Binary not found from hooks → `bun link` and confirm `which watchty`.
 - Disk filling up → `watchty config set ttl 24h` or `watchty cleanup --dry-run`.
-- Tab completes folders instead of sessions → `watchty completion install` then `source ~/.zshrc`.
+- Tab completes folders instead of sessions → `watchty completion install` (also run by `install-hooks`) then `source ~/.zshrc`.
 - `list` shows every project → you’re outside a Cursor workspace; use `-w .` or `cd` into the project.
 
 ## Contributing

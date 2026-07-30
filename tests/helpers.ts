@@ -4,7 +4,12 @@ import { ROOT } from "../src/paths";
 
 /** Wipe watchty state between tests in this worker. */
 export function resetWatchtyData(): void {
-  for (const name of ["state.json", "state.lock", "config.json", "last-cleanup"]) {
+  for (const name of [
+    "state.json",
+    "state.lock",
+    "config.json",
+    "last-cleanup",
+  ]) {
     const p = join(ROOT, name);
     if (existsSync(p)) unlinkSync(p);
     for (const suffix of [".tmp", ".tmp.lock"]) {
@@ -12,10 +17,11 @@ export function resetWatchtyData(): void {
       if (existsSync(alt)) unlinkSync(alt);
     }
   }
-  const sessions = join(ROOT, "sessions");
-  if (existsSync(sessions)) {
-    for (const name of readdirSync(sessions)) {
-      rmSync(join(sessions, name), { force: true });
+  for (const dir of ["sessions", "completions"]) {
+    const path = join(ROOT, dir);
+    if (!existsSync(path)) continue;
+    for (const name of readdirSync(path)) {
+      rmSync(join(path, name), { force: true });
     }
   }
 }

@@ -15,6 +15,11 @@ export const ROOT = resolveRoot();
 export const STATE_PATH = join(ROOT, "state.json");
 export const SESSIONS_DIR = join(ROOT, "sessions");
 
+/** ~/.cursor, or WATCHTY_CURSOR_DIR for tests / alternate installs. */
+export function globalCursorDir(): string {
+  return process.env.WATCHTY_CURSOR_DIR?.trim() || join(homedir(), ".cursor");
+}
+
 /** Basename of a workspace path for Ghostty window titles. */
 export function workspaceWindowTitle(workspace?: string): string {
   if (!workspace) return "Cursor Agent";

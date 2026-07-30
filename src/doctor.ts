@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { completionInstallStatus } from "./completion";
 import { CONFIG_PATH, loadConfig, resolvedSettings } from "./config";
 import { formatTtl } from "./cleanup";
 import { ghosttyAvailable } from "./ghostty";
@@ -10,7 +11,8 @@ import {
 import { ROOT, STATE_PATH, SESSIONS_DIR } from "./paths";
 
 export async function cmdDoctor(): Promise<void> {
-  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const checks: { name: string; ok: boolean; detail: string; soft?: boolean }[] =
+    [];
 
   const bunPath = Bun.which("bun");
   checks.push({
@@ -78,11 +80,19 @@ export async function cmdDoctor(): Promise<void> {
     detail: `${ROOT} (state: ${STATE_PATH}, logs: ${SESSIONS_DIR})`,
   });
 
+  const completion = completionInstallStatus();
+  checks.push({
+    name: "shell completion",
+    ok: completion.ok,
+    detail: completion.detail,
+    soft: true, // missing Tab-complete is annoying but not a hard failure
+  });
+
   let failed = false;
   for (const c of checks) {
     const mark = c.ok ? "ok" : "!!";
     console.log(`[${mark}] ${c.name}: ${c.detail}`);
-    if (!c.ok) failed = true;
+    if (!c.ok && !c.soft) failed = true;
   }
 
   if (!g.ok) {
@@ -92,6 +102,11 @@ export async function cmdDoctor(): Promise<void> {
   }
   if (!linked) {
     console.log(`\nInstall: cd ${packageRoot()} && bun link`);
+  }
+  if (!completion.ok) {
+    console.log(
+      "\nHint: Tab-complete session names with: watchty completion install && source ~/.zshrc",
+    );
   }
 
   console.log(`\nExample: watchty view "Fix login"`);
